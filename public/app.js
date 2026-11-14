@@ -1,0 +1,783 @@
+"use strict";
+/* Cabinet – interface (demandes, dossiers, clients, devis, factures, paramètres, équipe) */
+
+// ============================================================ Outils
+const $ = (s, el = document) => el.querySelector(s);
+const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+const esc = v => String(v == null ? "" : v).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+const today = () => { const d = new Date(); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10); };
+const addDays = (iso, n) => { const d = new Date(iso + "T12:00:00"); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
+const daysTo = iso => Math.round((new Date(iso + "T12:00:00") - new Date(today() + "T12:00:00")) / 86400000);
+const fdate = iso => iso ? iso.slice(8, 10) + "/" + iso.slice(5, 7) + "/" + iso.slice(0, 4) : "";
+const grp = n => String(Math.round(Math.abs(n))).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+const money = n => (n < 0 ? "-" : "") + grp(n || 0) + " F";
+const num = v => { const x = parseFloat(String(v == null ? "" : v).replace(/\s/g, "").replace(",", ".")); return isNaN(x) ? 0 : x; };
+const norm = s => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+const byDesc = k => (a, b) => String(b[k] || "").localeCompare(String(a[k] || ""));
+
+let D = null, ME = null, USERS = [];
+const S = () => Object.assign({
+  cabinet: "", avocat: "", titre: "Avocat", adresse: "", ville: "98860 Koné", tel: "", email: "", ridet: "", rib: "",
+  tgc: 11, delai: 30, validite: 30, mentions: "", logo: "",
+  domaines: ["Droit de la famille", "Droit pénal", "Droit civil", "Droit du travail", "Droit des affaires / sociétés", "Droit immobilier / foncier", "Droit coutumier", "Droit administratif", "Recouvrement de créances", "Autre"]
+}, D.settings || {});
+
+async function api(method, url, body) {
+  const r = await fetch(url, { method, headers: body ? { "Content-Type": "application/json" } : {}, body: body ? JSON.stringify(body) : undefined, credentials: "same-origin" });
+  if (r.status === 401 && url !== "/api/login") { ME = null; render(); throw new Error("non_connecte"); }
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || "erreur");
+  return j;
+}
+async function save(col, obj) {
+  const saved = await api("PUT", `/api/docs/${col}/${obj.id}`, obj);
+  const list = D[col], i = list.findIndex(x => x.id === saved.id);
+  if (i >= 0) list[i] = saved; else list.push(saved);
+  return saved;
+}
+async function remove(col, id) {
+  await api("DELETE", `/api/docs/${col}/${id}`);
+  D[col] = D[col].filter(x => x.id !== id);
+}
+function toast(msg) {
+  document.querySelectorAll(".toast").forEach(x => x.remove());
+  const t = document.createElement("div"); t.className = "toast"; t.textContent = msg; document.body.appendChild(t);
+  setTimeout(() => t.remove(), 2600);
+}
+const ERR = { facture_emise: "Une facture émise ne peut pas être supprimée : établissez un avoir.", reserve_admin: "Réservé à l'avocat (administrateur).", email_deja_utilise: "Cette adresse e-mail est déjà utilisée.", champs_invalides: "Vérifiez le nom, l'e-mail et le mot de passe (8 caractères minimum).", mot_de_passe_trop_court: "Mot de passe trop court (8 caractères minimum).", mot_de_passe_actuel_incorrect: "Mot de passe actuel incorrect.", format_inconnu: "Ce fichier n'est pas une sauvegarde du logiciel." };
+const fail = e => { if (e.message !== "non_connecte") alert(ERR[e.message] || "Erreur : " + e.message); };
+
+// ============================================================ Référentiels
+const ST_DEM = { nouvelle: ["Nouvelle", "acc"], rappeler: ["À rappeler", "warn"], rdv: ["RDV fixé", "info"], convertie: ["Dossier ouvert", "ok"], sans_suite: ["Sans suite", ""] };
+const ST_DOS = { ouvert: ["Ouvert", "info"], en_cours: ["En cours", "acc"], attente: ["En attente", "warn"], clos: ["Clos", ""] };
+const ST_DEV = { brouillon: ["Brouillon", ""], envoye: ["Envoyé", "info"], accepte: ["Accepté", "ok"], refuse: ["Refusé", "bad"] };
+const tag = (map, k) => { const m = map[k] || [k || "—", ""]; return `<span class="tag ${m[1]}">${esc(m[0])}</span>`; };
+const opts = (map, cur) => Object.entries(map).map(([k, v]) => `<option value="${k}" ${k === cur ? "selected" : ""}>${esc(Array.isArray(v) ? v[0] : v)}</option>`).join("");
+const listOpts = (arr, cur, empty) => (empty != null ? `<option value="">${esc(empty)}</option>` : "") + arr.map(v => `<option ${v === cur ? "selected" : ""}>${esc(v)}</option>`).join("");
+const JURIDICTIONS = ["Tribunal de première instance de Nouméa", "TPI – Section détachée de Koné", "Cour d'appel de Nouméa", "Tribunal du travail", "Tribunal mixte de commerce", "Tribunal administratif de Nouméa", "Juge aux affaires familiales", "Juge des enfants", "Tribunal correctionnel"];
+
+const client = id => D.clients.find(c => c.id === id);
+const dossier = id => D.dossiers.find(d => d.id === id);
+const clientName = c => !c ? "—" : c.type === "societe" ? (c.societe || c.nom || "—") : [c.civilite, (c.nom || "").toUpperCase(), c.prenom].filter(Boolean).join(" ");
+const dosLabel = d => d ? `${d.num || ""} – ${d.intitule || ""}` : "—";
+
+// Totaux d'un devis / d'une facture : honoraires soumis à TGC, débours non soumis.
+function totals(doc) {
+  let hon = 0, deb = 0;
+  (doc.lignes || []).forEach(l => { const m = num(l.qte) * num(l.pu); if (l.type === "deb") deb += m; else hon += m; });
+  const taux = doc.tgc != null && doc.tgc !== "" ? num(doc.tgc) : num(S().tgc);
+  const tgc = Math.round(hon * taux / 100);
+  return { hon: Math.round(hon), deb: Math.round(deb), taux, tgc, ttc: Math.round(hon) + tgc + Math.round(deb) };
+}
+const paid = f => (f.paiements || []).reduce((a, p) => a + num(p.montant), 0);
+function factState(f) {
+  if (f.statut !== "emise") return ["Brouillon", ""];
+  const t = totals(f).ttc, p = paid(f);
+  if (f.avoir) return ["Avoir", "info"];
+  if (p >= t && t > 0) return ["Payée", "ok"];
+  if (f.echeance && daysTo(f.echeance) < 0) return [p > 0 ? "Partielle – en retard" : "En retard", "bad"];
+  return [p > 0 ? "Partiellement payée" : "À régler", "warn"];
+}
+const reste = f => f.statut === "emise" && !f.avoir ? Math.max(0, totals(f).ttc - paid(f)) : 0;
+
+// ============================================================ Fenêtre modale
+function modal(html, mount) {
+  const o = document.createElement("div"); o.className = "overlay";
+  o.innerHTML = `<div class="modal">${html}</div>`;
+  o.addEventListener("mousedown", e => { if (e.target === o) close(); });
+  const close = () => { o.remove(); document.removeEventListener("keydown", onKey); };
+  const onKey = e => { if (e.key === "Escape") close(); };
+  document.addEventListener("keydown", onKey);
+  document.body.appendChild(o);
+  if (mount) mount(o.firstChild, close);
+  const first = $("input,select,textarea", o); if (first) first.focus();
+  return close;
+}
+const readForm = el => { const o = {}; $$("[name]", el).forEach(i => o[i.name] = i.type === "checkbox" ? i.checked : i.value.trim()); return o; };
+
+// ============================================================ Connexion
+function renderLogin() {
+  document.getElementById("root").innerHTML = `
+  <div class="login"><form class="card" id="lf">
+    <h1>Cabinet</h1><div class="muted">Gestion des dossiers et de la facturation</div>
+    <div class="f"><label>E-mail</label><input name="email" type="email" autocomplete="username" required></div>
+    <div class="f"><label>Mot de passe</label><input name="password" type="password" autocomplete="current-password" required></div>
+    <div class="err" id="le"></div>
+    <button class="btn pri" style="width:100%;margin-top:6px">Se connecter</button>
+  </form></div>`;
+  $("#lf").onsubmit = async e => {
+    e.preventDefault();
+    try { ME = await api("POST", "/api/login", readForm(e.target)); await boot(); }
+    catch (err) { $("#le").textContent = err.message === "trop_de_tentatives" ? "Trop de tentatives, réessayez dans 15 minutes." : "Identifiants incorrects."; }
+  };
+}
+
+// ============================================================ Cadre et navigation
+const NAV = [
+  ["tableau", "Tableau de bord"], ["demandes", "Demandes clients"], ["dossiers", "Dossiers"], ["clients", "Clients"],
+  ["devis", "Devis"], ["factures", "Factures"], ["parametres", "Paramètres"], ["equipe", "Équipe"]
+];
+function route() { const h = location.hash.replace(/^#\/?/, "").split("/"); return { page: h[0] || "tableau", id: h[1] || null }; }
+function go(h) { location.hash = "#/" + h; }
+
+function render() {
+  if (!ME) return renderLogin();
+  const r = route();
+  const open = D.demandes.filter(d => ["nouvelle", "rappeler", "rdv"].includes(d.statut)).length;
+  const navPage = { dossier: "dossiers", devisEdit: "devis", facture: "factures" }[r.page] || r.page;
+  document.getElementById("root").innerHTML = `
+  <div class="layout">
+    <nav class="side">
+      <div class="brand"><b>${esc(S().cabinet || "Cabinet")}</b><span>${esc(S().avocat || "Gestion du cabinet")}</span></div>
+      ${NAV.filter(([k]) => ME.role === "admin" || k !== "equipe").map(([k, l]) => `<a href="#/${k}" class="${navPage === k ? "on" : ""}">${l}${k === "demandes" && open ? `<span class="pill">${open}</span>` : ""}</a>`).join("")}
+      <div class="grow"></div>
+      <div class="who">${esc(ME.name)}<br><button id="pw">Mot de passe</button><button id="lo">Déconnexion</button></div>
+    </nav>
+    <main id="main"></main>
+  </div>`;
+  $("#lo").onclick = async () => { await api("POST", "/api/logout"); ME = null; render(); };
+  $("#pw").onclick = changePassword;
+  const V = { tableau: vDashboard, demandes: vDemandes, dossiers: vDossiers, dossier: vDossier, clients: vClients, devis: r.id ? vDevisEdit : vDevis, factures: vFactures, facture: vFactureEdit, parametres: vParametres, equipe: vEquipe };
+  (V[r.page] || vDashboard)($("#main"), r.id);
+  window.scrollTo(0, 0);
+}
+window.addEventListener("hashchange", () => { if (ME) render(); });
+
+// ============================================================ Tableau de bord
+function vDashboard(el) {
+  const dem = D.demandes.filter(d => ["nouvelle", "rappeler", "rdv"].includes(d.statut)).sort(byDesc("date"));
+  const actifs = D.dossiers.filter(d => d.statut !== "clos");
+  const ech = [];
+  actifs.forEach(d => (d.echeances || []).filter(e => !e.fait && e.date).forEach(e => ech.push({ d, e })));
+  ech.sort((a, b) => a.e.date.localeCompare(b.e.date));
+  const imp = D.factures.filter(f => reste(f) > 0);
+  const totImp = imp.reduce((a, f) => a + reste(f), 0), retard = imp.filter(f => f.echeance && daysTo(f.echeance) < 0);
+  const y = today().slice(0, 4);
+  const enc = D.factures.reduce((a, f) => a + (f.paiements || []).filter(p => (p.date || "").startsWith(y)).reduce((s, p) => s + num(p.montant), 0), 0);
+  const devAtt = D.devis.filter(d => d.statut === "envoye");
+  el.innerHTML = `
+  <div class="head"><h1>Tableau de bord</h1><div class="sp"></div>
+    <button class="btn" onclick="editDemande()">+ Demande client</button><button class="btn pri" onclick="go('facture/new')">+ Facture</button></div>
+  <div class="grid kpis">
+    <div class="card kpi"><div class="l">Demandes à traiter</div><div class="v">${dem.length}</div><div class="s">${dem.filter(d => d.urgence === "urgente").length} urgente(s)</div></div>
+    <div class="card kpi"><div class="l">Dossiers en cours</div><div class="v">${actifs.length}</div><div class="s">${D.dossiers.length - actifs.length} clos</div></div>
+    <div class="card kpi"><div class="l">Reste à encaisser</div><div class="v">${money(totImp)}</div><div class="s">${retard.length} facture(s) en retard</div></div>
+    <div class="card kpi"><div class="l">Encaissé en ${y}</div><div class="v">${money(enc)}</div><div class="s">TTC</div></div>
+    <div class="card kpi"><div class="l">Devis en attente</div><div class="v">${devAtt.length}</div><div class="s">${money(devAtt.reduce((a, d) => a + totals(d).ttc, 0))}</div></div>
+  </div>
+  <div class="grid two" style="margin-top:16px">
+    <div class="card"><h2>Échéances à venir</h2>${ech.length ? `<table>${ech.slice(0, 10).map(({ d, e }) => {
+      const n = daysTo(e.date);
+      return `<tr class="click" onclick="go('dossier/${d.id}')"><td class="${n < 0 ? "late" : n <= 7 ? "soon" : ""}" style="white-space:nowrap">${fdate(e.date)}${e.heure ? " " + esc(e.heure) : ""}</td><td>${esc(e.libelle)}<div class="small muted">${esc(dosLabel(d))}</div></td></tr>`;
+    }).join("")}</table>` : `<div class="empty">Aucune échéance</div>`}</div>
+    <div class="card"><h2>Demandes clients non traitées</h2>${dem.length ? `<table>${dem.slice(0, 10).map(d => `
+      <tr class="click" onclick="editDemande('${d.id}')"><td style="white-space:nowrap">${fdate(d.date)}</td><td><b>${esc((d.nom || "").toUpperCase())} ${esc(d.prenom)}</b> ${d.urgence === "urgente" ? '<span class="tag bad">Urgent</span>' : ""}<div class="small muted">${esc((d.objet || "").slice(0, 90))}</div></td><td>${tag(ST_DEM, d.statut)}</td></tr>`).join("")}</table>` : `<div class="empty">Tout est traité</div>`}</div>
+    <div class="card"><h2>Factures à encaisser</h2>${imp.length ? `<table>${imp.sort((a, b) => (a.echeance || "").localeCompare(b.echeance || "")).slice(0, 10).map(f => `
+      <tr class="click" onclick="go('facture/${f.id}')"><td>${esc(f.num)}</td><td>${esc(clientName(client(f.clientId)))}</td><td class="${f.echeance && daysTo(f.echeance) < 0 ? "late" : ""}">${fdate(f.echeance)}</td><td class="num">${money(reste(f))}</td></tr>`).join("")}</table>` : `<div class="empty">Aucune facture en attente</div>`}</div>
+    <div class="card"><h2>Derniers dossiers</h2>${actifs.length ? `<table>${actifs.sort(byDesc("updatedAt")).slice(0, 8).map(d => `
+      <tr class="click" onclick="go('dossier/${d.id}')"><td>${esc(d.num)}</td><td>${esc(d.intitule)}<div class="small muted">${esc(clientName(client(d.clientId)))}</div></td><td>${tag(ST_DOS, d.statut)}</td></tr>`).join("")}</table>` : `<div class="empty">Aucun dossier</div>`}</div>
+  </div>`;
+}
+
+// ============================================================ Demandes clients (saisie secrétariat)
+let demFilter = "atraiter", demQ = "";
+function vDemandes(el) {
+  const F = { atraiter: ["À traiter", d => ["nouvelle", "rappeler", "rdv"].includes(d.statut)], convertie: ["Dossier ouvert", d => d.statut === "convertie"], sans_suite: ["Sans suite", d => d.statut === "sans_suite"], toutes: ["Toutes", () => true] };
+  const q = norm(demQ);
+  const list = D.demandes.filter(F[demFilter][1]).filter(d => !q || norm([d.nom, d.prenom, d.tel, d.email, d.objet].join(" ")).includes(q)).sort(byDesc("date"));
+  el.innerHTML = `
+  <div class="head"><h1>Demandes clients</h1><div class="sp"></div><button class="btn pri" onclick="editDemande()">+ Nouvelle demande</button></div>
+  <div class="filters"><div class="chips">${Object.entries(F).map(([k, v]) => `<button class="chip ${k === demFilter ? "on" : ""}" data-f="${k}">${v[0]} (${D.demandes.filter(v[1]).length})</button>`).join("")}</div>
+    <input id="dq" placeholder="Rechercher un nom, un téléphone…" value="${esc(demQ)}"></div>
+  <div class="card" style="padding:6px 8px">${list.length ? `<table>
+    <tr><th>Reçue le</th><th>Contact</th><th>Coordonnées</th><th>L'affaire en un mot</th><th>Statut</th></tr>
+    ${list.map(d => `<tr class="click" onclick="editDemande('${d.id}')">
+      <td style="white-space:nowrap">${fdate(d.date)}<div class="small muted">${esc(d.canal || "")}</div></td>
+      <td><b>${esc((d.nom || "").toUpperCase())}</b> ${esc(d.prenom)} ${d.urgence === "urgente" ? '<span class="tag bad">Urgent</span>' : ""}<div class="small muted">${esc(d.domaine || "")}</div></td>
+      <td class="small">${esc(d.tel)}<br>${esc(d.email)}</td>
+      <td>${esc((d.objet || "").slice(0, 140))}${d.rdv ? `<div class="small" style="margin-top:3px">RDV : ${fdate(d.rdv)} ${esc(d.rdvHeure || "")}</div>` : ""}</td>
+      <td>${tag(ST_DEM, d.statut)}</td></tr>`).join("")}
+  </table>` : `<div class="empty">Aucune demande</div>`}</div>`;
+  $$(".chip", el).forEach(b => b.onclick = () => { demFilter = b.dataset.f; vDemandes(el); });
+  const inp = $("#dq", el); inp.oninput = () => { demQ = inp.value; vDemandes(el); const n = $("#dq", el); n.focus(); n.setSelectionRange(n.value.length, n.value.length); };
+}
+
+function editDemande(id) {
+  const d = id ? Object.assign({}, D.demandes.find(x => x.id === id)) : { id: uid(), date: today(), statut: "nouvelle", urgence: "normale", canal: "Téléphone" };
+  const s = S();
+  modal(`
+    <h2>${id ? "Demande de " + esc((d.nom || "").toUpperCase() + " " + (d.prenom || "")) : "Nouvelle demande client"}</h2>
+    <div class="form">
+      <div class="sec">Contact</div>
+      <div class="f"><label>Nom *</label><input name="nom" value="${esc(d.nom)}" required></div>
+      <div class="f"><label>Prénom</label><input name="prenom" value="${esc(d.prenom)}"></div>
+      <div class="f"><label>Reçue le</label><input name="date" type="date" value="${esc(d.date)}"></div>
+      <div class="f"><label>Téléphone</label><input name="tel" type="tel" value="${esc(d.tel)}"></div>
+      <div class="f s4"><label>E-mail</label><input name="email" type="email" value="${esc(d.email)}"></div>
+      <div class="sec">L'affaire</div>
+      <div class="f s6"><label>Un mot sur l'affaire *</label><textarea name="objet" placeholder="Ex. : litige avec son employeur, licenciement le 3 novembre, souhaite contester…">${esc(d.objet)}</textarea></div>
+      <div class="f"><label>Domaine</label><select name="domaine">${listOpts(s.domaines, d.domaine, "—")}</select></div>
+      <div class="f"><label>Urgence</label><select name="urgence">${opts({ normale: "Normale", urgente: "Urgente" }, d.urgence)}</select></div>
+      <div class="f"><label>Prise de contact</label><select name="canal">${listOpts(["Téléphone", "E-mail", "Passage au cabinet", "Recommandation", "Autre"], d.canal)}</select></div>
+      <div class="sec">Suivi</div>
+      <div class="f"><label>Statut</label><select name="statut">${opts(ST_DEM, d.statut)}</select></div>
+      <div class="f"><label>Rendez-vous le</label><input name="rdv" type="date" value="${esc(d.rdv)}"></div>
+      <div class="f"><label>Heure</label><input name="rdvHeure" type="time" value="${esc(d.rdvHeure)}"></div>
+      <div class="f s6"><label>Notes de suivi</label><textarea name="notes" placeholder="Rappelé le…, attend des pièces…">${esc(d.notes)}</textarea></div>
+    </div>
+    ${id ? `<div class="small muted" style="margin-top:10px">Saisie par ${esc(D.users[d.createdBy] || "—")}${d.dossierId && dossier(d.dossierId) ? ` · <a href="#/dossier/${d.dossierId}">Dossier ${esc(dossier(d.dossierId).num)}</a>` : ""}</div>` : ""}
+    <div class="actions">
+      ${id ? `<button class="btn danger" id="del">Supprimer</button>` : ""}<div class="sp"></div>
+      <button class="btn ghost" id="cancel">Annuler</button>
+      ${!d.dossierId ? `<button class="btn" id="conv">Ouvrir un dossier</button>` : ""}
+      <button class="btn pri" id="ok">Enregistrer</button>
+    </div>`, (m, close) => {
+    const collect = () => { const f = readForm(m); if (!f.nom) { alert("Le nom est obligatoire."); return null; } if (f.rdv && f.statut === "nouvelle") f.statut = "rdv"; return Object.assign(d, f); };
+    $("#cancel", m).onclick = close;
+    $("#ok", m).onclick = async () => { const o = collect(); if (!o) return; try { await save("demandes", o); close(); toast("Demande enregistrée"); render(); } catch (e) { fail(e); } };
+    if ($("#del", m)) $("#del", m).onclick = async () => { if (!confirm("Supprimer cette demande ?")) return; try { await remove("demandes", d.id); close(); render(); } catch (e) { fail(e); } };
+    if ($("#conv", m)) $("#conv", m).onclick = async () => { const o = collect(); if (!o) return; try { const dos = await convertDemande(o); close(); go("dossier/" + dos.id); toast("Dossier " + dos.num + " ouvert"); } catch (e) { fail(e); } };
+  });
+}
+
+// Transforme une demande en client + dossier (réutilise un client existant de même nom et même téléphone / e-mail).
+async function convertDemande(d) {
+  let c = D.clients.find(c => norm(c.nom) === norm(d.nom) && norm(c.prenom) === norm(d.prenom) && ((d.tel && c.tel === d.tel) || (d.email && norm(c.email) === norm(d.email))));
+  if (!c) c = await save("clients", { id: uid(), type: "particulier", civilite: "", nom: d.nom, prenom: d.prenom, tel: d.tel, email: d.email, adresse: "", notes: "" });
+  const dos = await save("dossiers", {
+    id: uid(), intitule: (d.domaine && d.domaine !== "Autre" ? d.domaine + " – " : "") + clientName(c), clientId: c.id, domaine: d.domaine || "", statut: "ouvert",
+    ouverture: today(), resume: d.objet || "", echeances: d.rdv ? [{ id: uid(), date: d.rdv, heure: d.rdvHeure || "", libelle: "Premier rendez-vous", fait: false }] : [],
+    journal: [{ id: uid(), date: today(), texte: "Dossier ouvert depuis la demande du " + fdate(d.date) + (d.notes ? " – " + d.notes : "") }], temps: [], honoraires: "forfait", taux: ""
+  });
+  d.statut = "convertie"; d.dossierId = dos.id;
+  await save("demandes", d);
+  return dos;
+}
+
+// ============================================================ Clients
+let cliQ = "";
+function vClients(el) {
+  const q = norm(cliQ);
+  const list = D.clients.filter(c => !q || norm([clientName(c), c.tel, c.email, c.societe].join(" ")).includes(q)).sort((a, b) => clientName(a).localeCompare(clientName(b)));
+  el.innerHTML = `
+  <div class="head"><h1>Clients</h1><div class="sp"></div><button class="btn pri" onclick="editClient()">+ Nouveau client</button></div>
+  <div class="filters"><input id="cq" placeholder="Rechercher…" value="${esc(cliQ)}"></div>
+  <div class="card" style="padding:6px 8px">${list.length ? `<table>
+    <tr><th>Client</th><th>Téléphone</th><th>E-mail</th><th class="num">Dossiers</th><th class="num">Reste dû</th></tr>
+    ${list.map(c => { const due = D.factures.filter(f => f.clientId === c.id).reduce((a, f) => a + reste(f), 0); return `<tr class="click" onclick="editClient('${c.id}')">
+      <td><b>${esc(clientName(c))}</b>${c.type === "societe" && c.nom ? `<div class="small muted">Représentée par ${esc(c.prenom)} ${esc(c.nom)}</div>` : ""}</td><td>${esc(c.tel)}</td><td>${esc(c.email)}</td>
+      <td class="num">${D.dossiers.filter(d => d.clientId === c.id).length}</td><td class="num ${due ? "late" : ""}">${due ? money(due) : "—"}</td></tr>`; }).join("")}
+  </table>` : `<div class="empty">Aucun client</div>`}</div>`;
+  const inp = $("#cq", el); inp.oninput = () => { cliQ = inp.value; vClients(el); const n = $("#cq", el); n.focus(); n.setSelectionRange(n.value.length, n.value.length); };
+}
+
+function editClient(id, onSaved) {
+  const c = id ? Object.assign({}, client(id)) : { id: uid(), type: "particulier" };
+  const dossiers = id ? D.dossiers.filter(d => d.clientId === id) : [];
+  modal(`
+    <h2>${id ? esc(clientName(c)) : "Nouveau client"}</h2>
+    <div class="form">
+      <div class="f"><label>Type</label><select name="type">${opts({ particulier: "Particulier", societe: "Société / organisme" }, c.type)}</select></div>
+      <div class="f s4 soc"><label>Raison sociale</label><input name="societe" value="${esc(c.societe)}"></div>
+      <div class="f s1"><label>Civilité</label><select name="civilite">${listOpts(["", "M.", "Mme"], c.civilite)}</select></div>
+      <div class="f"><label class="lbn">Nom *</label><input name="nom" value="${esc(c.nom)}"></div>
+      <div class="f"><label>Prénom</label><input name="prenom" value="${esc(c.prenom)}"></div>
+      <div class="f s1 soc"><label>RIDET</label><input name="ridet" value="${esc(c.ridet)}"></div>
+      <div class="f"><label>Téléphone</label><input name="tel" value="${esc(c.tel)}"></div>
+      <div class="f s4"><label>E-mail</label><input name="email" value="${esc(c.email)}"></div>
+      <div class="f s6"><label>Adresse (apparaît sur les devis et factures)</label><textarea name="adresse" style="min-height:56px">${esc(c.adresse)}</textarea></div>
+      <div class="f s6"><label>Notes</label><textarea name="notes">${esc(c.notes)}</textarea></div>
+    </div>
+    ${dossiers.length ? `<div style="margin-top:14px"><b class="small">Dossiers</b><table>${dossiers.map(d => `<tr><td><a href="#/dossier/${d.id}">${esc(d.num)}</a></td><td>${esc(d.intitule)}</td><td>${tag(ST_DOS, d.statut)}</td></tr>`).join("")}</table></div>` : ""}
+    <div class="actions">${id ? `<button class="btn danger" id="del">Supprimer</button>` : ""}<div class="sp"></div>
+      <button class="btn ghost" id="cancel">Annuler</button>${id ? `<button class="btn" id="nd">Nouveau dossier</button>` : ""}<button class="btn pri" id="ok">Enregistrer</button></div>`, (m, close) => {
+    const sync = () => { const soc = $("[name=type]", m).value === "societe"; $$(".soc", m).forEach(x => x.style.display = soc ? "" : "none"); $(".lbn", m).textContent = soc ? "Nom du représentant" : "Nom *"; };
+    $("[name=type]", m).onchange = sync; sync();
+    $("#cancel", m).onclick = close;
+    const doSave = async () => {
+      const f = readForm(m); if (!(f.type === "societe" ? f.societe : f.nom)) { alert(f.type === "societe" ? "La raison sociale est obligatoire." : "Le nom est obligatoire."); return null; }
+      try { const s = await save("clients", Object.assign(c, f)); return s; } catch (e) { fail(e); return null; }
+    };
+    $("#ok", m).onclick = async () => { const s = await doSave(); if (!s) return; close(); toast("Client enregistré"); if (onSaved) onSaved(s); else render(); };
+    if ($("#nd", m)) $("#nd", m).onclick = async () => { const s = await doSave(); if (!s) return; close(); editDossier(null, s.id); };
+    if ($("#del", m)) $("#del", m).onclick = async () => {
+      if (dossiers.length || D.factures.some(f => f.clientId === id) || D.devis.some(f => f.clientId === id)) return alert("Ce client a des dossiers, devis ou factures : il ne peut pas être supprimé.");
+      if (!confirm("Supprimer ce client ?")) return; try { await remove("clients", id); close(); render(); } catch (e) { fail(e); }
+    };
+  });
+}
+const clientOpts = cur => `<option value="">— Choisir un client —</option>` + D.clients.slice().sort((a, b) => clientName(a).localeCompare(clientName(b))).map(c => `<option value="${c.id}" ${c.id === cur ? "selected" : ""}>${esc(clientName(c))}</option>`).join("");
+
+// ============================================================ Dossiers
+let dosFilter = "actifs", dosQ = "";
+function vDossiers(el) {
+  const F = { actifs: ["En cours", d => d.statut !== "clos"], clos: ["Clos", d => d.statut === "clos"], tous: ["Tous", () => true] };
+  const q = norm(dosQ);
+  const list = D.dossiers.filter(F[dosFilter][1]).filter(d => !q || norm([d.num, d.intitule, clientName(client(d.clientId)), d.adverse, d.rg, d.domaine].join(" ")).includes(q)).sort(byDesc("num"));
+  el.innerHTML = `
+  <div class="head"><h1>Dossiers</h1><div class="sp"></div><button class="btn pri" onclick="editDossier()">+ Nouveau dossier</button></div>
+  <div class="filters"><div class="chips">${Object.entries(F).map(([k, v]) => `<button class="chip ${k === dosFilter ? "on" : ""}" data-f="${k}">${v[0]} (${D.dossiers.filter(v[1]).length})</button>`).join("")}</div>
+    <input id="oq" placeholder="N°, client, partie adverse, n° RG…" value="${esc(dosQ)}"></div>
+  <div class="card" style="padding:6px 8px">${list.length ? `<table>
+    <tr><th>N°</th><th>Dossier</th><th>Client</th><th>Prochaine échéance</th><th class="num">Facturé</th><th>Statut</th></tr>
+    ${list.map(d => { const e = nextEch(d), fac = D.factures.filter(f => f.dossierId === d.id && f.statut === "emise").reduce((a, f) => a + totals(f).ttc, 0); return `<tr class="click" onclick="go('dossier/${d.id}')">
+      <td style="white-space:nowrap">${esc(d.num)}</td><td><b>${esc(d.intitule)}</b><div class="small muted">${esc([d.domaine, d.adverse ? "c/ " + d.adverse : ""].filter(Boolean).join(" · "))}</div></td>
+      <td>${esc(clientName(client(d.clientId)))}</td>
+      <td>${e ? `<span class="${daysTo(e.date) < 0 ? "late" : daysTo(e.date) <= 7 ? "soon" : ""}">${fdate(e.date)}</span><div class="small muted">${esc(e.libelle)}</div>` : '<span class="muted">—</span>'}</td>
+      <td class="num">${fac ? money(fac) : "—"}</td><td>${tag(ST_DOS, d.statut)}</td></tr>`; }).join("")}
+  </table>` : `<div class="empty">Aucun dossier</div>`}</div>`;
+  $$(".chip", el).forEach(b => b.onclick = () => { dosFilter = b.dataset.f; vDossiers(el); });
+  const inp = $("#oq", el); inp.oninput = () => { dosQ = inp.value; vDossiers(el); const n = $("#oq", el); n.focus(); n.setSelectionRange(n.value.length, n.value.length); };
+}
+const nextEch = d => (d.echeances || []).filter(e => !e.fait && e.date).sort((a, b) => a.date.localeCompare(b.date))[0];
+
+function editDossier(id, clientId) {
+  const d = id ? Object.assign({}, dossier(id)) : { id: uid(), statut: "ouvert", ouverture: today(), clientId: clientId || "", echeances: [], journal: [], temps: [], honoraires: "forfait" };
+  const s = S();
+  modal(`
+    <h2>${id ? "Dossier " + esc(d.num) : "Nouveau dossier"}</h2>
+    <div class="form">
+      <div class="f s4"><label>Intitulé *</label><input name="intitule" value="${esc(d.intitule)}" placeholder="Ex. : Divorce DUPONT / MARTIN"></div>
+      <div class="f"><label>Statut</label><select name="statut">${opts(ST_DOS, d.statut)}</select></div>
+      <div class="f s4"><label>Client *</label><select name="clientId">${clientOpts(d.clientId)}</select></div>
+      <div class="f"><label>&nbsp;</label><button class="btn" type="button" id="nc">+ Nouveau client</button></div>
+      <div class="f"><label>Domaine</label><select name="domaine">${listOpts(s.domaines, d.domaine, "—")}</select></div>
+      <div class="f"><label>Partie adverse</label><input name="adverse" value="${esc(d.adverse)}"></div>
+      <div class="f"><label>Avocat adverse</label><input name="avocatAdverse" value="${esc(d.avocatAdverse)}"></div>
+      <div class="f s4"><label>Juridiction</label><input name="juridiction" list="jl" value="${esc(d.juridiction)}"><datalist id="jl">${JURIDICTIONS.map(j => `<option>${esc(j)}</option>`).join("")}</datalist></div>
+      <div class="f"><label>N° RG / référence</label><input name="rg" value="${esc(d.rg)}"></div>
+      <div class="f"><label>Ouvert le</label><input name="ouverture" type="date" value="${esc(d.ouverture)}"></div>
+      <div class="f"><label>Honoraires</label><select name="honoraires">${opts({ forfait: "Forfait", horaire: "Au temps passé", resultat: "Forfait + honoraire de résultat", aj: "Aide juridictionnelle" }, d.honoraires)}</select></div>
+      <div class="f"><label>Taux horaire HT (F)</label><input name="taux" inputmode="numeric" value="${esc(d.taux || s.tauxHoraire || "")}"></div>
+      <div class="f s6"><label>Résumé de l'affaire</label><textarea name="resume">${esc(d.resume)}</textarea></div>
+    </div>
+    <div class="actions">${id ? `<button class="btn danger" id="del">Supprimer</button>` : ""}<div class="sp"></div><button class="btn ghost" id="cancel">Annuler</button><button class="btn pri" id="ok">Enregistrer</button></div>`, (m, close) => {
+    $("#cancel", m).onclick = close;
+    $("#nc", m).onclick = () => editClient(null, c => { $("[name=clientId]", m).innerHTML = clientOpts(c.id); });
+    $("#ok", m).onclick = async () => {
+      const f = readForm(m); if (!f.intitule || !f.clientId) return alert("L'intitulé et le client sont obligatoires.");
+      try { const s = await save("dossiers", Object.assign(d, f)); close(); toast(id ? "Dossier enregistré" : "Dossier " + s.num + " ouvert"); id ? render() : go("dossier/" + s.id); } catch (e) { fail(e); }
+    };
+    if ($("#del", m)) $("#del", m).onclick = async () => {
+      if (D.factures.some(f => f.dossierId === id) || D.devis.some(f => f.dossierId === id)) return alert("Ce dossier a des devis ou des factures : passez-le plutôt en « Clos ».");
+      if (!confirm("Supprimer définitivement ce dossier ?")) return; try { await remove("dossiers", id); close(); go("dossiers"); } catch (e) { fail(e); }
+    };
+  });
+}
+
+function vDossier(el, id) {
+  const d = dossier(id); if (!d) { el.innerHTML = `<div class="empty">Dossier introuvable</div>`; return; }
+  const c = client(d.clientId);
+  const devis = D.devis.filter(x => x.dossierId === id).sort(byDesc("date")), facts = D.factures.filter(x => x.dossierId === id).sort(byDesc("date"));
+  const temps = (d.temps || []).slice().sort(byDesc("date")), nonFact = temps.filter(t => !t.factureId);
+  const hNon = nonFact.reduce((a, t) => a + num(t.heures), 0), hTot = temps.reduce((a, t) => a + num(t.heures), 0);
+  const ech = (d.echeances || []).slice().sort((a, b) => (a.fait - b.fait) || String(a.date).localeCompare(String(b.date)));
+  const facTot = facts.filter(f => f.statut === "emise").reduce((a, f) => a + totals(f).ttc, 0), encTot = facts.reduce((a, f) => a + paid(f), 0);
+  el.innerHTML = `
+  <div class="head"><div><div class="small muted"><a href="#/dossiers">Dossiers</a> › ${esc(d.num)}</div><h1>${esc(d.intitule)}</h1></div><div class="sp"></div>
+    ${tag(ST_DOS, d.statut)}<button class="btn" id="ed">Modifier</button><button class="btn" id="nd">+ Devis</button><button class="btn pri" id="nf">+ Facture</button></div>
+  <div class="grid two">
+    <div class="card"><h2>Informations</h2><dl class="kv">
+      <dt>Client</dt><dd><a href="javascript:editClient('${c ? c.id : ""}')">${esc(clientName(c))}</a>${c ? `<div class="small muted">${esc([c.tel, c.email].filter(Boolean).join(" · "))}</div>` : ""}</dd>
+      ${d.domaine ? `<dt>Domaine</dt><dd>${esc(d.domaine)}</dd>` : ""}
+      ${d.adverse ? `<dt>Partie adverse</dt><dd>${esc(d.adverse)}${d.avocatAdverse ? `<div class="small muted">Conseil : ${esc(d.avocatAdverse)}</div>` : ""}</dd>` : ""}
+      ${d.juridiction ? `<dt>Juridiction</dt><dd>${esc(d.juridiction)}${d.rg ? ` – RG ${esc(d.rg)}` : ""}</dd>` : d.rg ? `<dt>Référence</dt><dd>${esc(d.rg)}</dd>` : ""}
+      <dt>Ouvert le</dt><dd>${fdate(d.ouverture)}</dd>
+      <dt>Honoraires</dt><dd>${esc({ forfait: "Forfait", horaire: "Au temps passé", resultat: "Forfait + résultat", aj: "Aide juridictionnelle" }[d.honoraires] || "—")}${d.taux ? ` – ${money(num(d.taux))} HT / h` : ""}</dd>
+      <dt>Facturé / encaissé</dt><dd>${money(facTot)} / ${money(encTot)}</dd>
+    </dl>${d.resume ? `<p style="white-space:pre-wrap;margin:14px 0 0">${esc(d.resume)}</p>` : ""}</div>
+    <div class="card"><div class="head" style="margin-bottom:8px"><h2 style="margin:0">Échéances et audiences</h2><div class="sp"></div><button class="btn sm" id="ae">+ Ajouter</button></div>
+      ${ech.length ? `<table>${ech.map(e => { const n = daysTo(e.date); return `<tr><td style="width:26px"><input type="checkbox" data-ech="${e.id}" ${e.fait ? "checked" : ""} title="Fait"></td>
+        <td style="white-space:nowrap" class="${e.fait ? "muted" : n < 0 ? "late" : n <= 7 ? "soon" : ""}">${fdate(e.date)} ${esc(e.heure || "")}</td><td class="${e.fait ? "muted" : ""}" style="${e.fait ? "text-decoration:line-through" : ""}">${esc(e.libelle)}</td>
+        <td class="num"><button class="btn sm ghost" data-delech="${e.id}">×</button></td></tr>`; }).join("")}</table>` : `<div class="empty">Aucune échéance</div>`}</div>
+    <div class="card"><div class="head" style="margin-bottom:8px"><h2 style="margin:0">Suivi du dossier</h2><div class="sp"></div></div>
+      <div style="display:flex;gap:8px;margin-bottom:10px"><input id="jt" placeholder="Ajouter une note (appel, courrier, audience…)" style="flex:1;border:1px solid var(--line);border-radius:6px;padding:8px 10px"><button class="btn" id="aj">Ajouter</button></div>
+      ${(d.journal || []).length ? `<ul class="timeline">${d.journal.slice().sort(byDesc("date")).map(j => `<li><span class="small muted">${fdate(j.date)}${j.by ? " · " + esc(D.users[j.by] || "") : ""}</span><div style="white-space:pre-wrap">${esc(j.texte)}</div></li>`).join("")}</ul>` : `<div class="empty">Aucune note</div>`}</div>
+    <div class="card"><div class="head" style="margin-bottom:8px"><h2 style="margin:0">Temps passé</h2><div class="sp"></div>
+      ${hNon ? `<button class="btn sm" id="ft">Facturer ${String(hNon).replace(".", ",")} h</button>` : ""}<button class="btn sm" id="at">+ Saisir</button></div>
+      ${temps.length ? `<table>${temps.map(t => `<tr><td style="white-space:nowrap">${fdate(t.date)}</td><td>${esc(t.desc)}</td><td class="num">${String(num(t.heures)).replace(".", ",")} h</td><td>${t.factureId ? '<span class="tag ok">Facturé</span>' : `<button class="btn sm ghost" data-deltps="${t.id}">×</button>`}</td></tr>`).join("")}
+        <tr><td></td><td class="muted">Total</td><td class="num"><b>${String(hTot).replace(".", ",")} h</b></td><td></td></tr></table>` : `<div class="empty">Aucun temps saisi</div>`}</div>
+    <div class="card"><h2>Devis</h2>${devis.length ? `<table>${devis.map(x => `<tr class="click" onclick="go('devis/${x.id}')"><td>${esc(x.num)}</td><td>${fdate(x.date)}</td><td class="num">${money(totals(x).ttc)}</td><td>${tag(ST_DEV, x.statut)}</td></tr>`).join("")}</table>` : `<div class="empty">Aucun devis</div>`}</div>
+    <div class="card"><h2>Factures</h2>${facts.length ? `<table>${facts.map(f => { const st = factState(f); return `<tr class="click" onclick="go('facture/${f.id}')"><td>${esc(f.num || "Brouillon")}</td><td>${fdate(f.date)}</td><td class="num">${money(totals(f).ttc)}</td><td><span class="tag ${st[1]}">${st[0]}</span></td></tr>`; }).join("")}</table>` : `<div class="empty">Aucune facture</div>`}</div>
+  </div>`;
+  const upd = async (fn, msg) => { const o = JSON.parse(JSON.stringify(dossier(id))); fn(o); try { await save("dossiers", o); if (msg) toast(msg); render(); } catch (e) { fail(e); } };
+  $("#ed").onclick = () => editDossier(id);
+  $("#nd").onclick = () => go(`devis/new?dossier=${id}`);
+  $("#nf").onclick = () => go(`facture/new?dossier=${id}`);
+  $("#aj").onclick = () => { const t = $("#jt").value.trim(); if (t) upd(o => (o.journal = o.journal || []).push({ id: uid(), date: today(), texte: t, by: ME.id })); };
+  $("#jt").onkeydown = e => { if (e.key === "Enter") $("#aj").click(); };
+  $$("[data-ech]").forEach(cb => cb.onchange = () => upd(o => { const e = o.echeances.find(x => x.id === cb.dataset.ech); e.fait = cb.checked; }));
+  $$("[data-delech]").forEach(b => b.onclick = () => confirm("Supprimer cette échéance ?") && upd(o => o.echeances = o.echeances.filter(x => x.id !== b.dataset.delech)));
+  $$("[data-deltps]").forEach(b => b.onclick = () => confirm("Supprimer cette saisie ?") && upd(o => o.temps = o.temps.filter(x => x.id !== b.dataset.deltps)));
+  $("#ae").onclick = () => modal(`<h2>Nouvelle échéance</h2><div class="form">
+      <div class="f"><label>Date *</label><input name="date" type="date" value="${today()}"></div><div class="f"><label>Heure</label><input name="heure" type="time"></div>
+      <div class="f s6"><label>Libellé *</label><input name="libelle" list="el" placeholder="Audience, dépôt de conclusions, délai d'appel…"><datalist id="el">${["Audience", "Audience de plaidoirie", "Audience de mise en état", "Dépôt des conclusions", "Délai d'appel", "Rendez-vous client", "Médiation / conciliation", "Expertise"].map(x => `<option>${x}</option>`).join("")}</datalist></div></div>
+      <div class="actions"><div class="sp"></div><button class="btn ghost" id="c">Annuler</button><button class="btn pri" id="o">Ajouter</button></div>`, (m, close) => {
+    $("#c", m).onclick = close;
+    $("#o", m).onclick = () => { const f = readForm(m); if (!f.date || !f.libelle) return alert("Date et libellé obligatoires."); close(); upd(o => (o.echeances = o.echeances || []).push(Object.assign({ id: uid(), fait: false }, f)), "Échéance ajoutée"); };
+  });
+  $("#at").onclick = () => modal(`<h2>Saisir du temps</h2><div class="form">
+      <div class="f"><label>Date</label><input name="date" type="date" value="${today()}"></div><div class="f"><label>Durée (heures) *</label><input name="heures" inputmode="decimal" placeholder="1,5"></div>
+      <div class="f s6"><label>Diligence *</label><input name="desc" placeholder="Rédaction des conclusions, rendez-vous client…"></div></div>
+      <div class="actions"><div class="sp"></div><button class="btn ghost" id="c">Annuler</button><button class="btn pri" id="o">Ajouter</button></div>`, (m, close) => {
+    $("#c", m).onclick = close;
+    $("#o", m).onclick = () => { const f = readForm(m); if (!num(f.heures) || !f.desc) return alert("Durée et diligence obligatoires."); f.heures = num(f.heures); close(); upd(o => (o.temps = o.temps || []).push(Object.assign({ id: uid(), by: ME.id }, f)), "Temps ajouté"); };
+  });
+  if ($("#ft")) $("#ft").onclick = async () => {
+    const taux = num(d.taux || S().tauxHoraire);
+    if (!taux) return alert("Renseignez d'abord le taux horaire du dossier (bouton « Modifier »).");
+    const f = { id: uid(), statut: "brouillon", date: today(), echeance: addDays(today(), +S().delai || 30), clientId: d.clientId, dossierId: id, objet: d.intitule, tgc: S().tgc,
+      lignes: nonFact.slice().sort((a, b) => a.date.localeCompare(b.date)).map(t => ({ type: "hon", desc: fdate(t.date) + " – " + t.desc, qte: num(t.heures), pu: taux })), paiements: [], tempsIds: nonFact.map(t => t.id) };
+    try {
+      const s = await save("factures", f);
+      const o = JSON.parse(JSON.stringify(dossier(id))); o.temps.forEach(t => { if (f.tempsIds.includes(t.id)) t.factureId = s.id; }); await save("dossiers", o);
+      go("facture/" + s.id); toast("Facture préparée à partir du temps passé");
+    } catch (e) { fail(e); }
+  };
+}
+
+// ============================================================ Devis et factures : listes
+let factFilter = "toutes";
+function vDevis(el) {
+  const list = D.devis.slice().sort(byDesc("num"));
+  el.innerHTML = `
+  <div class="head"><h1>Devis</h1><div class="sp"></div><button class="btn pri" onclick="go('devis/new')">+ Nouveau devis</button></div>
+  <div class="card" style="padding:6px 8px">${list.length ? `<table><tr><th>N°</th><th>Date</th><th>Client</th><th>Objet</th><th class="num">Total TTC</th><th>Statut</th></tr>
+    ${list.map(x => `<tr class="click" onclick="go('devis/${x.id}')"><td>${esc(x.num)}</td><td>${fdate(x.date)}</td><td>${esc(clientName(client(x.clientId)))}</td><td>${esc(x.objet)}</td><td class="num">${money(totals(x).ttc)}</td><td>${tag(ST_DEV, x.statut)}${x.factureId ? ' <span class="tag ok">Facturé</span>' : ""}</td></tr>`).join("")}</table>` : `<div class="empty">Aucun devis</div>`}</div>`;
+}
+function vFactures(el) {
+  const F = { toutes: ["Toutes", () => true], impayees: ["À encaisser", f => reste(f) > 0], retard: ["En retard", f => reste(f) > 0 && f.echeance && daysTo(f.echeance) < 0], payees: ["Payées", f => f.statut === "emise" && !f.avoir && reste(f) === 0], brouillons: ["Brouillons", f => f.statut !== "emise"] };
+  const list = D.factures.filter(F[factFilter][1]).sort((a, b) => (b.num || "~").localeCompare(a.num || "~") || byDesc("date")(a, b));
+  const sum = k => list.filter(f => f.statut === "emise").reduce((a, f) => a + k(f), 0);
+  el.innerHTML = `
+  <div class="head"><h1>Factures</h1><div class="sp"></div><button class="btn pri" onclick="go('facture/new')">+ Nouvelle facture</button></div>
+  <div class="filters"><div class="chips">${Object.entries(F).map(([k, v]) => `<button class="chip ${k === factFilter ? "on" : ""}" data-f="${k}">${v[0]} (${D.factures.filter(v[1]).length})</button>`).join("")}</div></div>
+  <div class="card" style="padding:6px 8px">${list.length ? `<table><tr><th>N°</th><th>Date</th><th>Client</th><th>Dossier</th><th class="num">Total TTC</th><th class="num">Reste dû</th><th>Échéance</th><th>État</th></tr>
+    ${list.map(f => { const st = factState(f); return `<tr class="click" onclick="go('facture/${f.id}')"><td>${esc(f.num || "—")}</td><td>${fdate(f.date)}</td><td>${esc(clientName(client(f.clientId)))}</td><td class="small">${esc(dossier(f.dossierId) ? dossier(f.dossierId).num : "")}</td>
+      <td class="num">${money(totals(f).ttc)}</td><td class="num">${reste(f) ? money(reste(f)) : "—"}</td><td>${fdate(f.echeance)}</td><td><span class="tag ${st[1]}">${st[0]}</span></td></tr>`; }).join("")}
+    <tr><td colspan="4" class="muted">Total (factures émises)</td><td class="num"><b>${money(sum(f => totals(f).ttc))}</b></td><td class="num"><b>${money(sum(reste))}</b></td><td colspan="2"></td></tr></table>` : `<div class="empty">Aucune facture</div>`}</div>`;
+  $$(".chip", el).forEach(b => b.onclick = () => { factFilter = b.dataset.f; vFactures(el); });
+}
+
+// ============================================================ Éditeur commun devis / facture
+function linesEditor(doc, locked) {
+  return `<table class="lines"><tr><th class="ty">Nature</th><th>Désignation</th><th class="q num">Qté / h</th><th class="pu num">P.U. HT (F)</th><th class="num">Montant HT</th><th></th></tr>
+  ${(doc.lignes || []).map((l, i) => `<tr>
+    <td><select data-l="${i}" data-k="type" ${locked ? "disabled" : ""}><option value="hon" ${l.type !== "deb" ? "selected" : ""}>Honoraires</option><option value="deb" ${l.type === "deb" ? "selected" : ""}>Débours / frais</option></select></td>
+    <td><input data-l="${i}" data-k="desc" value="${esc(l.desc)}" ${locked ? "disabled" : ""}></td>
+    <td><input data-l="${i}" data-k="qte" value="${esc(l.qte)}" style="text-align:right" ${locked ? "disabled" : ""}></td>
+    <td><input data-l="${i}" data-k="pu" value="${esc(l.pu)}" style="text-align:right" ${locked ? "disabled" : ""}></td>
+    <td class="num" data-m="${i}">${money(num(l.qte) * num(l.pu))}</td>
+    <td>${locked ? "" : `<button class="btn sm ghost" data-rm="${i}">×</button>`}</td></tr>`).join("")}
+  </table>${locked ? "" : `<button class="btn sm" id="addl" style="margin-top:6px">+ Ligne</button> <button class="btn sm" id="addd" style="margin-top:6px">+ Débours</button>`}
+  <div class="totals" id="tot"></div>`;
+}
+function totalsHtml(doc) {
+  const t = totals(doc), p = doc.paiements ? paid(doc) : 0;
+  return `<div><span>Honoraires HT</span><span>${money(t.hon)}</span></div><div><span>TGC ${String(t.taux).replace(".", ",")} %</span><span>${money(t.tgc)}</span></div>
+    ${t.deb ? `<div><span>Débours (non soumis)</span><span>${money(t.deb)}</span></div>` : ""}<div class="big"><span>Total TTC</span><span>${money(t.ttc)}</span></div>
+    ${doc.paiements && doc.statut === "emise" && !doc.avoir ? `<div><span>Déjà réglé</span><span>${money(p)}</span></div><div class="big"><span>Reste dû</span><span>${money(Math.max(0, t.ttc - p))}</span></div>` : ""}`;
+}
+function bindLines(root, doc, locked, rerender) {
+  const refresh = () => { $("#tot", root).innerHTML = totalsHtml(doc); (doc.lignes || []).forEach((l, i) => { const c = $(`[data-m="${i}"]`, root); if (c) c.textContent = money(num(l.qte) * num(l.pu)); }); };
+  refresh();
+  if (locked) return;
+  $$("[data-l]", root).forEach(inp => inp.addEventListener(inp.tagName === "SELECT" ? "change" : "input", () => { doc.lignes[+inp.dataset.l][inp.dataset.k] = inp.value; refresh(); }));
+  $$("[data-rm]", root).forEach(b => b.onclick = () => { doc.lignes.splice(+b.dataset.rm, 1); rerender(); });
+  $("#addl", root).onclick = () => { doc.lignes.push({ type: "hon", desc: "", qte: 1, pu: "" }); rerender(); $$("[data-k=desc]", root).pop().focus(); };
+  $("#addd", root).onclick = () => { doc.lignes.push({ type: "deb", desc: "Frais de greffe / signification", qte: 1, pu: "" }); rerender(); };
+}
+function qparam(k) { const m = location.hash.match(new RegExp("[?&]" + k + "=([^&]+)")); return m ? decodeURIComponent(m[1]) : ""; }
+
+let curDoc = null;
+function vDevisEdit(el, rawId) {
+  const id = rawId.split("?")[0];
+  if (!curDoc || curDoc._key !== "devis:" + id) {
+    if (id === "new") {
+      const dos = dossier(qparam("dossier"));
+      curDoc = { id: uid(), _new: true, statut: "brouillon", date: today(), validite: addDays(today(), +S().validite || 30), clientId: dos ? dos.clientId : "", dossierId: dos ? dos.id : "", objet: dos ? dos.intitule : "", tgc: S().tgc, lignes: [{ type: "hon", desc: "", qte: 1, pu: "" }], conditions: "" };
+    } else { const x = D.devis.find(x => x.id === id); if (!x) { el.innerHTML = `<div class="empty">Devis introuvable</div>`; return; } curDoc = JSON.parse(JSON.stringify(x)); }
+    curDoc._key = "devis:" + id;
+  }
+  const doc = curDoc, locked = !!doc.factureId;
+  const dosOpts = `<option value="">— Aucun —</option>` + D.dossiers.filter(d => !doc.clientId || d.clientId === doc.clientId).map(d => `<option value="${d.id}" ${d.id === doc.dossierId ? "selected" : ""}>${esc(dosLabel(d))}</option>`).join("");
+  el.innerHTML = `
+  <div class="head"><div><div class="small muted"><a href="#/devis">Devis</a> › ${esc(doc.num || "Nouveau")}</div><h1>${doc.num ? "Devis " + esc(doc.num) : "Nouveau devis"}</h1></div><div class="sp"></div>
+    ${doc._new ? "" : `<button class="btn" id="pdf">PDF</button>${doc.factureId ? `<button class="btn" onclick="go('facture/${doc.factureId}')">Voir la facture</button>` : `<button class="btn" id="tof">Transformer en facture</button>`}`}
+    <button class="btn pri" id="sv">Enregistrer</button></div>
+  <div class="card">
+    <div class="form">
+      <div class="f s3"><label>Client *</label><select name="clientId">${clientOpts(doc.clientId)}</select></div>
+      <div class="f s3"><label>Dossier</label><select name="dossierId">${dosOpts}</select></div>
+      <div class="f s4"><label>Objet</label><input name="objet" value="${esc(doc.objet)}"></div>
+      <div class="f"><label>Statut</label><select name="statut">${opts(ST_DEV, doc.statut)}</select></div>
+      <div class="f s1"><label>TGC %</label><input name="tgc" value="${esc(doc.tgc)}"></div>
+      <div class="f"><label>Date</label><input name="date" type="date" value="${esc(doc.date)}"></div>
+      <div class="f"><label>Valable jusqu'au</label><input name="validite" type="date" value="${esc(doc.validite)}"></div>
+    </div>
+    <div style="margin-top:18px">${linesEditor(doc, locked)}</div>
+    <div class="form" style="margin-top:14px"><div class="f s6"><label>Conditions / modalités (provision, échéancier…)</label><textarea name="conditions">${esc(doc.conditions)}</textarea></div></div>
+    <div class="actions">${doc._new ? "" : `<button class="btn danger" id="del">Supprimer</button>`}<div class="sp"></div></div>
+  </div>`;
+  const rer = () => vDevisEdit(el, rawId);
+  $$(".form [name]", el).forEach(i => i.addEventListener("change", () => { doc[i.name] = i.value; if (i.name === "clientId") { doc.dossierId = ""; rer(); } if (i.name === "tgc") $("#tot", el).innerHTML = totalsHtml(doc); }));
+  $("[name=tgc]", el).addEventListener("input", e => { doc.tgc = e.target.value; $("#tot", el).innerHTML = totalsHtml(doc); });
+  bindLines(el, doc, locked, rer);
+  const doSave = async () => { $$(".form [name]", el).forEach(i => doc[i.name] = i.value); if (!doc.clientId) { alert("Choisissez un client."); return null; } const o = Object.assign({}, doc); delete o._new; delete o._key; try { const s = await save("devis", o); curDoc = Object.assign(JSON.parse(JSON.stringify(s)), { _key: "devis:" + s.id }); return s; } catch (e) { fail(e); return null; } };
+  $("#sv").onclick = async () => { const s = await doSave(); if (s) { toast("Devis " + s.num + " enregistré"); if (rawId.startsWith("new")) go("devis/" + s.id); else rer(); } };
+  if ($("#pdf")) $("#pdf").onclick = async () => { const s = await doSave(); if (s) pdfDoc(s, "devis"); };
+  if ($("#tof")) $("#tof").onclick = async () => {
+    const s = await doSave(); if (!s) return;
+    const f = { id: uid(), statut: "brouillon", date: today(), echeance: addDays(today(), +S().delai || 30), clientId: s.clientId, dossierId: s.dossierId, objet: s.objet, tgc: s.tgc, lignes: JSON.parse(JSON.stringify(s.lignes)), paiements: [], devisId: s.id, devisNum: s.num };
+    try { const fs = await save("factures", f); await save("devis", Object.assign({}, s, { statut: "accepte", factureId: fs.id })); curDoc = null; go("facture/" + fs.id); toast("Facture préparée depuis le devis"); } catch (e) { fail(e); }
+  };
+  if ($("#del")) $("#del").onclick = async () => { if (!confirm("Supprimer ce devis ?")) return; try { await remove("devis", doc.id); curDoc = null; go("devis"); } catch (e) { fail(e); } };
+}
+
+function vFactureEdit(el, rawId) {
+  const id = rawId.split("?")[0];
+  if (!curDoc || curDoc._key !== "facture:" + id) {
+    if (id === "new") {
+      const dos = dossier(qparam("dossier"));
+      curDoc = { id: uid(), _new: true, statut: "brouillon", date: today(), echeance: addDays(today(), +S().delai || 30), clientId: dos ? dos.clientId : "", dossierId: dos ? dos.id : "", objet: dos ? dos.intitule : "", tgc: S().tgc, lignes: [{ type: "hon", desc: "", qte: 1, pu: "" }], paiements: [] };
+    } else { const x = D.factures.find(x => x.id === id); if (!x) { el.innerHTML = `<div class="empty">Facture introuvable</div>`; return; } curDoc = JSON.parse(JSON.stringify(x)); }
+    curDoc._key = "facture:" + id;
+  }
+  const doc = curDoc, locked = doc.statut === "emise";
+  const st = factState(doc), t = totals(doc);
+  const dosOpts = `<option value="">— Aucun —</option>` + D.dossiers.filter(d => !doc.clientId || d.clientId === doc.clientId).map(d => `<option value="${d.id}" ${d.id === doc.dossierId ? "selected" : ""}>${esc(dosLabel(d))}</option>`).join("");
+  el.innerHTML = `
+  <div class="head"><div><div class="small muted"><a href="#/factures">Factures</a> › ${esc(doc.num || "Brouillon")}</div><h1>${doc.avoir ? "Avoir" : "Facture"} ${esc(doc.num || "(brouillon)")}</h1></div><div class="sp"></div>
+    <span class="tag ${st[1]}">${st[0]}</span>
+    ${doc._new ? "" : `<button class="btn" id="pdf">${locked ? "PDF" : "Aperçu PDF"}</button>`}
+    ${locked ? (doc.avoir ? "" : `<button class="btn" id="av">Établir un avoir</button>`) : `<button class="btn" id="sv">Enregistrer le brouillon</button><button class="btn pri" id="em">Émettre la facture</button>`}</div>
+  ${locked ? `<div class="small muted" style="margin:-10px 0 14px">Facture émise : son contenu et son numéro ne peuvent plus être modifiés. Pour la corriger, établissez un avoir.</div>` : ""}
+  ${doc.devisNum ? `<div class="small muted" style="margin:-10px 0 14px">Établie depuis le devis ${esc(doc.devisNum)}</div>` : ""}
+  <div class="card">
+    <div class="form">
+      <div class="f s3"><label>Client *</label><select name="clientId" ${locked ? "disabled" : ""}>${clientOpts(doc.clientId)}</select></div>
+      <div class="f s3"><label>Dossier</label><select name="dossierId" ${locked ? "disabled" : ""}>${dosOpts}</select></div>
+      <div class="f s4"><label>Objet</label><input name="objet" value="${esc(doc.objet)}" ${locked ? "disabled" : ""}></div>
+      <div class="f s1"><label>TGC %</label><input name="tgc" value="${esc(doc.tgc)}" ${locked ? "disabled" : ""}></div>
+      <div class="f s1"><label>Date</label><input name="date" type="date" value="${esc(doc.date)}" ${locked ? "disabled" : ""}></div>
+      <div class="f"><label>Échéance de paiement</label><input name="echeance" type="date" value="${esc(doc.echeance)}"></div>
+    </div>
+    <div style="margin-top:18px">${linesEditor(doc, locked)}</div>
+  </div>
+  ${locked && !doc.avoir ? `<div class="card" style="margin-top:16px"><div class="head" style="margin-bottom:8px"><h2 style="margin:0">Règlements</h2><div class="sp"></div><button class="btn sm pri" id="ap">+ Enregistrer un règlement</button></div>
+    ${(doc.paiements || []).length ? `<table><tr><th>Date</th><th>Mode</th><th>Référence</th><th class="num">Montant</th><th></th></tr>${doc.paiements.map((p, i) => `<tr><td>${fdate(p.date)}</td><td>${esc(p.mode)}</td><td>${esc(p.ref)}</td><td class="num">${money(num(p.montant))}</td><td class="num"><button class="btn sm ghost" data-rp="${i}">×</button></td></tr>`).join("")}</table>` : `<div class="empty">Aucun règlement enregistré</div>`}</div>` : ""}
+  <div class="actions">${!locked && !doc._new ? `<button class="btn danger" id="del">Supprimer le brouillon</button>` : ""}<div class="sp"></div></div>`;
+  const rer = () => vFactureEdit(el, rawId);
+  $$(".form [name]", el).forEach(i => i.addEventListener("change", () => { doc[i.name] = i.value; if (i.name === "clientId") { doc.dossierId = ""; rer(); } if (i.name === "tgc") $("#tot", el).innerHTML = totalsHtml(doc); if (locked && i.name === "echeance") persist().then(s => s && toast("Échéance modifiée")); }));
+  $("[name=tgc]", el).addEventListener("input", e => { doc.tgc = e.target.value; $("#tot", el).innerHTML = totalsHtml(doc); });
+  bindLines(el, doc, locked, rer);
+  const persist = async (extra) => {
+    if (!locked) $$(".form [name]", el).forEach(i => doc[i.name] = i.value);
+    if (!doc.clientId) { alert("Choisissez un client."); return null; }
+    const o = Object.assign({}, doc, extra || {}); delete o._new; delete o._key;
+    try { const s = await save("factures", o); curDoc = Object.assign(JSON.parse(JSON.stringify(s)), { _key: "facture:" + s.id }); return s; } catch (e) { fail(e); return null; }
+  };
+  if ($("#sv")) $("#sv").onclick = async () => { const s = await persist(); if (s) { toast("Brouillon enregistré"); if (rawId.startsWith("new")) go("facture/" + s.id); else rer(); } };
+  if ($("#em")) $("#em").onclick = async () => {
+    $$(".form [name]", el).forEach(i => doc[i.name] = i.value);
+    if (!doc.lignes.length || !totals(doc).ttc) return alert("La facture est vide.");
+    if (!confirm("Émettre la facture ? Elle recevra son numéro définitif et ne pourra plus être modifiée.")) return;
+    const s = await persist({ statut: "emise" }); if (s) { toast("Facture " + s.num + " émise"); if (rawId.startsWith("new")) go("facture/" + s.id); else rer(); }
+  };
+  if ($("#pdf")) $("#pdf").onclick = async () => { const s = locked ? doc : await persist(); if (s) pdfDoc(s, "facture"); };
+  if ($("#del")) $("#del").onclick = async () => {
+    if (!confirm("Supprimer ce brouillon ?")) return;
+    try {
+      await remove("factures", doc.id);
+      if (doc.devisId) { const dv = D.devis.find(x => x.id === doc.devisId); if (dv) await save("devis", Object.assign({}, dv, { factureId: "" })); }
+      if (doc.dossierId && doc.tempsIds) { const o = JSON.parse(JSON.stringify(dossier(doc.dossierId))); o.temps.forEach(t => { if (t.factureId === doc.id) delete t.factureId; }); await save("dossiers", o); }
+      curDoc = null; go("factures");
+    } catch (e) { fail(e); }
+  };
+  if ($("#av")) $("#av").onclick = async () => {
+    if (!confirm("Créer un avoir annulant cette facture ? Vous pourrez ajuster les montants avant de l'émettre.")) return;
+    const a = { id: uid(), avoir: true, avoirDe: doc.id, avoirDeNum: doc.num, statut: "brouillon", date: today(), echeance: today(), clientId: doc.clientId, dossierId: doc.dossierId, objet: "Avoir sur facture " + doc.num, tgc: doc.tgc, lignes: doc.lignes.map(l => Object.assign({}, l, { pu: -num(l.pu) })), paiements: [] };
+    try { const s = await save("factures", a); curDoc = null; go("facture/" + s.id); } catch (e) { fail(e); }
+  };
+  if ($("#ap")) $("#ap").onclick = () => modal(`<h2>Règlement – facture ${esc(doc.num)}</h2><div class="form">
+      <div class="f"><label>Date</label><input name="date" type="date" value="${today()}"></div>
+      <div class="f"><label>Montant (F) *</label><input name="montant" inputmode="numeric" value="${reste(doc)}"></div>
+      <div class="f"><label>Mode</label><select name="mode">${listOpts(["Virement", "Chèque", "Espèces", "Carte bancaire", "Prélèvement CARPA", "Aide juridictionnelle"], "Virement")}</select></div>
+      <div class="f s6"><label>Référence (n° de chèque, libellé du virement…)</label><input name="ref"></div></div>
+      <div class="actions"><div class="sp"></div><button class="btn ghost" id="c">Annuler</button><button class="btn pri" id="o">Enregistrer</button></div>`, (m, close) => {
+    $("#c", m).onclick = close;
+    $("#o", m).onclick = async () => { const f = readForm(m); f.montant = num(f.montant); if (!f.montant) return alert("Montant obligatoire."); doc.paiements = (doc.paiements || []).concat([f]); close(); const s = await persist(); if (s) { toast("Règlement enregistré"); rer(); } };
+  });
+  $$("[data-rp]", el).forEach(b => b.onclick = async () => { if (!confirm("Supprimer ce règlement ?")) return; doc.paiements.splice(+b.dataset.rp, 1); const s = await persist(); if (s) rer(); });
+}
+
+// ============================================================ PDF devis / facture
+function pdfDoc(doc, kind) {
+  const { jsPDF } = window.jspdf, pdf = new jsPDF({ unit: "mm", format: "a4" });
+  const s = S(), c = client(doc.clientId) || {}, dos = dossier(doc.dossierId), t = totals(doc);
+  const W = 210, M = 18, R = W - M, NAVY = [31, 42, 68], ACC = [138, 36, 50], GREY = [110, 115, 128];
+  const F = n => (n < 0 ? "-" : "") + grp(n) + " F CFP";
+  let y = 18;
+  // En-tête cabinet
+  let xText = M;
+  if (s.logo) { try { const p = pdf.getImageProperties(s.logo), h = 22, w = Math.min(45, h * p.width / p.height); pdf.addImage(s.logo, M, y - 4, w, w * p.height / p.width); xText = M + w + 6; } catch (e) { /* logo illisible */ } }
+  pdf.setFont("times", "bold"); pdf.setFontSize(16); pdf.setTextColor(...NAVY);
+  pdf.text(s.cabinet || s.avocat || "Cabinet", xText, y);
+  pdf.setFont("helvetica", "normal"); pdf.setFontSize(9); pdf.setTextColor(...GREY);
+  const head = [s.cabinet && s.avocat ? s.avocat : "", s.titre, s.adresse, s.ville, [s.tel ? "Tél. " + s.tel : "", s.email].filter(Boolean).join(" – "), s.ridet ? "RIDET " + s.ridet : ""].filter(Boolean);
+  head.forEach((l, i) => pdf.text(l, xText, y + 5.5 + i * 4.2));
+  y = Math.max(y + 5.5 + head.length * 4.2, 44) + 6;
+  // Titre
+  const title = kind === "devis" ? "DEVIS" : doc.avoir ? "AVOIR" : "FACTURE";
+  pdf.setFont("helvetica", "bold"); pdf.setFontSize(18); pdf.setTextColor(...ACC);
+  pdf.text(title + (doc.num ? " N° " + doc.num : " (brouillon)"), M, y);
+  pdf.setDrawColor(...ACC); pdf.setLineWidth(0.6); pdf.line(M, y + 2.5, M + 40, y + 2.5);
+  // Bloc client
+  const cx = 118; let cy = y + 10;
+  pdf.setFontSize(8); pdf.setTextColor(...GREY); pdf.setFont("helvetica", "normal"); pdf.text(kind === "devis" ? "DESTINATAIRE" : "FACTURÉ À", cx, cy - 4);
+  pdf.setFontSize(10.5); pdf.setTextColor(30, 34, 48); pdf.setFont("helvetica", "bold");
+  pdf.text(clientName(c), cx, cy); cy += 5; pdf.setFont("helvetica", "normal"); pdf.setFontSize(9.5);
+  if (c.type === "societe" && c.nom) { pdf.text("À l'attention de " + [c.civilite, c.prenom, c.nom].filter(Boolean).join(" "), cx, cy); cy += 4.5; }
+  String(c.adresse || "").split(/\n/).filter(Boolean).forEach(l => { pdf.splitTextToSize(l, R - cx).forEach(x => { pdf.text(x, cx, cy); cy += 4.5; }); });
+  if (c.ridet) { pdf.text("RIDET " + c.ridet, cx, cy); cy += 4.5; }
+  // Références
+  let ry = y + 10; pdf.setFontSize(9.5);
+  const ref = [["Date", fdate(doc.date)], kind === "devis" ? ["Valable jusqu'au", fdate(doc.validite)] : ["Échéance", fdate(doc.echeance)], dos ? ["Dossier", dos.num + (dos.rg ? " – RG " + dos.rg : "")] : null, doc.avoirDeNum ? ["Sur facture", doc.avoirDeNum] : null].filter(Boolean);
+  ref.forEach(([k, v]) => { pdf.setTextColor(...GREY); pdf.text(k, M, ry); pdf.setTextColor(30, 34, 48); pdf.text(v || "", M + 30, ry); ry += 5; });
+  y = Math.max(ry, cy) + 6;
+  if (doc.objet) { pdf.setFont("helvetica", "bold"); pdf.text("Objet : ", M, y); pdf.setFont("helvetica", "normal"); const ob = pdf.splitTextToSize(doc.objet, R - M - 14); pdf.text(ob, M + 14, y); y += ob.length * 4.6 + 4; }
+  // Tableau
+  const cols = { d: M + 2, q: 132, pu: 160, m: R - 2 };
+  const thead = () => { pdf.setFillColor(...NAVY); pdf.rect(M, y, R - M, 8, "F"); pdf.setTextColor(255); pdf.setFont("helvetica", "bold"); pdf.setFontSize(9);
+    pdf.text("Désignation", cols.d, y + 5.4); pdf.text("Qté", cols.q, y + 5.4, { align: "right" }); pdf.text("P.U. HT", cols.pu, y + 5.4, { align: "right" }); pdf.text("Montant HT", cols.m, y + 5.4, { align: "right" }); y += 8; };
+  thead();
+  pdf.setFont("helvetica", "normal"); pdf.setTextColor(30, 34, 48);
+  const rows = (doc.lignes || []).filter(l => l.desc || num(l.pu));
+  const section = (label, list) => {
+    if (!list.length) return;
+    if (y > 250) { pdf.addPage(); y = 20; thead(); }
+    pdf.setFont("helvetica", "bold"); pdf.setFontSize(8.5); pdf.setTextColor(...ACC); pdf.text(label.toUpperCase(), cols.d, y + 5); y += 7;
+    pdf.setFont("helvetica", "normal"); pdf.setFontSize(9.5); pdf.setTextColor(30, 34, 48);
+    list.forEach((l, i) => {
+      const lines = pdf.splitTextToSize(l.desc || "", cols.q - cols.d - 14), h = Math.max(1, lines.length) * 4.4 + 3;
+      if (y + h > 262) { pdf.addPage(); y = 20; thead(); pdf.setFont("helvetica", "normal"); pdf.setFontSize(9.5); pdf.setTextColor(30, 34, 48); }
+      pdf.text(lines, cols.d, y + 4.4);
+      pdf.text(String(num(l.qte)).replace(".", ","), cols.q, y + 4.4, { align: "right" }); pdf.text(grp(num(l.pu)) === "0" ? "" : (num(l.pu) < 0 ? "-" : "") + grp(num(l.pu)), cols.pu, y + 4.4, { align: "right" });
+      pdf.text(F(Math.round(num(l.qte) * num(l.pu))), cols.m, y + 4.4, { align: "right" });
+      y += h; pdf.setDrawColor(228, 226, 220); pdf.setLineWidth(0.2); pdf.line(M, y, R, y);
+    });
+  };
+  section("Honoraires", rows.filter(l => l.type !== "deb"));
+  section("Débours et frais (non soumis à TGC)", rows.filter(l => l.type === "deb"));
+  // Totaux
+  y += 5; if (y > 235) { pdf.addPage(); y = 25; }
+  const tl = [["Total honoraires HT", F(t.hon)], ["TGC " + String(t.taux).replace(".", ",") + " %", F(t.tgc)]];
+  if (t.deb) tl.push(["Débours", F(t.deb)]);
+  pdf.setFontSize(9.5);
+  tl.forEach(([k, v]) => { pdf.setTextColor(...GREY); pdf.text(k, 128, y); pdf.setTextColor(30, 34, 48); pdf.text(v, cols.m, y, { align: "right" }); y += 5.5; });
+  pdf.setFillColor(246, 233, 235); pdf.rect(124, y - 3.5, R - 124, 9, "F");
+  pdf.setFont("helvetica", "bold"); pdf.setFontSize(11); pdf.setTextColor(...ACC); pdf.text(doc.avoir ? "Total avoir TTC" : "Total TTC", 128, y + 2.6); pdf.text(F(t.ttc), cols.m, y + 2.6, { align: "right" }); y += 10;
+  if (kind === "facture" && !doc.avoir && doc.statut === "emise" && paid(doc) > 0) {
+    pdf.setFont("helvetica", "normal"); pdf.setFontSize(9.5); pdf.setTextColor(...GREY); pdf.text("Déjà réglé", 128, y + 2); pdf.setTextColor(30, 34, 48); pdf.text(F(paid(doc)), cols.m, y + 2, { align: "right" }); y += 5.5;
+    pdf.setFont("helvetica", "bold"); pdf.text("Reste à payer", 128, y + 2); pdf.text(F(reste(doc)), cols.m, y + 2, { align: "right" }); y += 8;
+  }
+  // Pied : conditions, règlement, mentions
+  y += 4; pdf.setFont("helvetica", "normal"); pdf.setFontSize(9); pdf.setTextColor(30, 34, 48);
+  const foot = [];
+  if (kind === "devis") { if (doc.conditions) foot.push(doc.conditions); foot.push("Bon pour accord – date et signature du client :"); }
+  else if (!doc.avoir) { foot.push("Règlement à réception, au plus tard le " + fdate(doc.echeance) + "."); if (s.rib) foot.push("Règlement par virement : " + s.rib); }
+  foot.forEach(f => { const l = pdf.splitTextToSize(f, R - M); if (y + l.length * 4.4 > 275) { pdf.addPage(); y = 25; } pdf.text(l, M, y); y += l.length * 4.4 + 2; });
+  const n = pdf.getNumberOfPages();
+  for (let i = 1; i <= n; i++) {
+    pdf.setPage(i); pdf.setFontSize(7.5); pdf.setTextColor(...GREY);
+    const ment = pdf.splitTextToSize(s.mentions || "", R - M); pdf.text(ment, W / 2, 287 - ment.length * 3.4, { align: "center" });
+    if (n > 1) pdf.text(i + " / " + n, R, 292, { align: "right" });
+  }
+  pdf.save((title.charAt(0) + title.slice(1).toLowerCase()) + "-" + (doc.num || "brouillon") + "-" + clientName(c).replace(/[^\w\- ]+/g, "").trim().replace(/\s+/g, "-") + ".pdf");
+}
+
+// ============================================================ Paramètres
+function vParametres(el) {
+  const s = S(), admin = ME.role === "admin";
+  el.innerHTML = `
+  <div class="head"><h1>Paramètres</h1></div>
+  <div class="card">
+    <div class="form">
+      <div class="sec">Cabinet (en-tête des devis et factures)</div>
+      <div class="f s3"><label>Nom du cabinet</label><input name="cabinet" value="${esc(s.cabinet)}" placeholder="Cabinet Maître …"></div>
+      <div class="f s3"><label>Avocat</label><input name="avocat" value="${esc(s.avocat)}" placeholder="Maître Prénom NOM"></div>
+      <div class="f s3"><label>Titre</label><input name="titre" value="${esc(s.titre)}" placeholder="Avocat au Barreau de Nouméa"></div>
+      <div class="f s3"><label>RIDET</label><input name="ridet" value="${esc(s.ridet)}"></div>
+      <div class="f s3"><label>Adresse</label><input name="adresse" value="${esc(s.adresse)}"></div>
+      <div class="f s3"><label>Code postal et ville</label><input name="ville" value="${esc(s.ville)}"></div>
+      <div class="f s3"><label>Téléphone</label><input name="tel" value="${esc(s.tel)}"></div>
+      <div class="f s3"><label>E-mail</label><input name="email" value="${esc(s.email)}"></div>
+      <div class="f s6"><label>Coordonnées bancaires (banque, IBAN / RIB)</label><input name="rib" value="${esc(s.rib)}"></div>
+      <div class="f s6"><label>Mentions en bas de page</label><textarea name="mentions" placeholder="Membre d'une association agréée… / Assurance RCP…">${esc(s.mentions)}</textarea></div>
+      <div class="f s3"><label>Logo</label><input type="file" id="logo" accept="image/png,image/jpeg"></div>
+      <div class="f s3"><label>&nbsp;</label><div>${s.logo ? `<img src="${s.logo}" style="max-height:48px;vertical-align:middle"> <button class="btn sm ghost" id="rmlogo">Retirer</button>` : '<span class="muted small">Aucun logo</span>'}</div></div>
+      <div class="sec">Facturation</div>
+      <div class="f s1"><label>TGC (%)</label><input name="tgc" value="${esc(s.tgc)}"></div>
+      <div class="f"><label>Taux horaire HT par défaut (F)</label><input name="tauxHoraire" value="${esc(s.tauxHoraire)}"></div>
+      <div class="f"><label>Délai de paiement (jours)</label><input name="delai" value="${esc(s.delai)}"></div>
+      <div class="f s1"><label>Validité devis (j)</label><input name="validite" value="${esc(s.validite)}"></div>
+      <div class="f s6"><label>Domaines d'intervention (un par ligne)</label><textarea name="domaines" style="min-height:140px">${esc(s.domaines.join("\n"))}</textarea></div>
+    </div>
+    ${admin ? `<div class="actions"><div class="sp"></div><button class="btn pri" id="ss">Enregistrer</button></div>` : `<div class="small muted" style="margin-top:12px">Seul l'avocat (administrateur) peut modifier ces paramètres.</div>`}
+  </div>
+  ${admin ? `<div class="card" style="margin-top:16px"><h2>Sauvegarde</h2><p class="small muted" style="margin-top:0">Le serveur fait une copie automatique chaque nuit (30 jours conservés). Vous pouvez aussi télécharger une copie complète.</p>
+    <a class="btn" href="/api/export">Télécharger une sauvegarde</a> <label class="btn">Restaurer une sauvegarde<input type="file" id="imp" accept=".json" hidden></label></div>` : ""}`;
+  if (!admin) { $$("input,textarea", el).forEach(i => i.disabled = true); return; }
+  let logo = s.logo;
+  const collect = () => { const f = readForm($(".form", el)); f.domaines = f.domaines.split("\n").map(x => x.trim()).filter(Boolean); f.logo = logo; return Object.assign({}, D.settings || {}, f); };
+  $("#logo", el).onchange = e => { const file = e.target.files[0]; if (!file) return; if (file.size > 1.5e6) return alert("Logo trop lourd (1,5 Mo maximum)."); const r = new FileReader(); r.onload = () => { logo = r.result; D.settings = collect(); vParametres(el); toast("Logo chargé – pensez à enregistrer"); }; r.readAsDataURL(file); };
+  if ($("#rmlogo", el)) $("#rmlogo", el).onclick = () => { logo = ""; D.settings = collect(); vParametres(el); };
+  $("#ss", el).onclick = async () => { const n = collect(); try { await api("PUT", "/api/settings", n); D.settings = n; toast("Paramètres enregistrés"); render(); } catch (e) { fail(e); } };
+  $("#imp", el).onchange = async e => {
+    const file = e.target.files[0]; if (!file) return;
+    if (!confirm("Restaurer cette sauvegarde ? Les éléments de même identifiant seront remplacés.")) return;
+    try { const r = await api("POST", "/api/import", JSON.parse(await file.text())); D = await api("GET", "/api/data"); toast(r.documents + " éléments restaurés"); render(); } catch (err) { fail(err); }
+  };
+}
+
+// ============================================================ Équipe
+async function vEquipe(el) {
+  if (ME.role !== "admin") { el.innerHTML = `<div class="empty">Réservé à l'avocat.</div>`; return; }
+  USERS = await api("GET", "/api/users");
+  el.innerHTML = `
+  <div class="head"><h1>Équipe</h1><div class="sp"></div><button class="btn pri" id="au">+ Ajouter une personne</button></div>
+  <div class="card" style="padding:6px 8px"><table><tr><th>Nom</th><th>E-mail</th><th>Rôle</th><th>Accès</th><th></th></tr>
+  ${USERS.map(u => `<tr><td><b>${esc(u.name)}</b></td><td>${esc(u.email)}</td><td>${u.role === "admin" ? "Avocat / administrateur" : "Secrétariat / collaborateur"}</td>
+    <td>${u.active ? '<span class="tag ok">Actif</span>' : '<span class="tag">Désactivé</span>'}</td>
+    <td class="num">${u.id === ME.id ? "" : `<button class="btn sm" data-pw="${u.id}">Nouveau mot de passe</button> <button class="btn sm" data-act="${u.id}">${u.active ? "Désactiver" : "Réactiver"}</button>`}</td></tr>`).join("")}
+  </table></div>
+  <p class="small muted">Le secrétariat a accès à tout le logiciel (demandes, dossiers, devis, factures) sauf aux paramètres du cabinet et à la gestion de l'équipe.</p>`;
+  $("#au", el).onclick = () => modal(`<h2>Ajouter une personne</h2><div class="form">
+      <div class="f s3"><label>Nom et prénom</label><input name="name"></div><div class="f s3"><label>E-mail (identifiant)</label><input name="email" type="email"></div>
+      <div class="f s3"><label>Mot de passe provisoire (8 caractères min.)</label><input name="password"></div>
+      <div class="f s3"><label>Rôle</label><select name="role"><option value="membre">Secrétariat / collaborateur</option><option value="admin">Avocat / administrateur</option></select></div></div>
+      <div class="actions"><div class="sp"></div><button class="btn ghost" id="c">Annuler</button><button class="btn pri" id="o">Créer le compte</button></div>`, (m, close) => {
+    $("#c", m).onclick = close;
+    $("#o", m).onclick = async () => { try { await api("POST", "/api/users", readForm(m)); close(); toast("Compte créé"); D = await api("GET", "/api/data"); vEquipe(el); } catch (e) { fail(e); } };
+  });
+  $$("[data-act]", el).forEach(b => b.onclick = async () => { const u = USERS.find(x => x.id === b.dataset.act); try { await api("PATCH", "/api/users/" + u.id, { active: !u.active }); vEquipe(el); } catch (e) { fail(e); } });
+  $$("[data-pw]", el).forEach(b => b.onclick = async () => { const p = prompt("Nouveau mot de passe (8 caractères minimum) :"); if (!p) return; try { await api("PATCH", "/api/users/" + b.dataset.pw, { password: p }); toast("Mot de passe modifié"); } catch (e) { fail(e); } });
+}
+
+function changePassword() {
+  modal(`<h2>Changer mon mot de passe</h2><div class="form">
+    <div class="f s6"><label>Mot de passe actuel</label><input name="current" type="password"></div>
+    <div class="f s6"><label>Nouveau mot de passe (8 caractères minimum)</label><input name="next" type="password"></div></div>
+    <div class="actions"><div class="sp"></div><button class="btn ghost" id="c">Annuler</button><button class="btn pri" id="o">Valider</button></div>`, (m, close) => {
+    $("#c", m).onclick = close;
+    $("#o", m).onclick = async () => { try { await api("POST", "/api/me/password", readForm(m)); close(); toast("Mot de passe modifié"); } catch (e) { fail(e); } };
+  });
+}
+
+// ============================================================ Démarrage
+async function boot() {
+  try { ME = ME || await api("GET", "/api/me"); D = await api("GET", "/api/data"); } catch (e) { ME = null; }
+  render();
+}
+boot();

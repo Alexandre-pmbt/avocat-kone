@@ -1,0 +1,289 @@
+"use strict";
+/*
+ * Cabinet d'avocat – gestion des demandes, dossiers, devis et factures
+ * Serveur Express + SQLite. Lancement : node server.js
+ */
+require("dotenv").config();
+const path = require("path");
+const fs = require("fs");
+const crypto = require("crypto");
+const express = require("express");
+const bcrypt = require("bcryptjs");
+const Database = require("better-sqlite3");
+
+const PORT = +process.env.PORT || 3000;
+const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(__dirname, "data"));
+const COOKIE_SECURE = process.env.COOKIE_SECURE === "true";
+const SESSION_DAYS = +process.env.SESSION_DAYS || 30;
+const COLLECTIONS = ["demandes", "clients", "dossiers", "devis", "factures"];
+
+fs.mkdirSync(DATA_DIR, { recursive: true });
+
+// ---------------------------------------------------------------- Base de données
+const db = new Database(path.join(DATA_DIR, "cabinet.db"));
+db.pragma("journal_mode = WAL");
+db.pragma("foreign_keys = ON");
+db.exec(`
+  CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY, email TEXT UNIQUE NOT NULL, name TEXT NOT NULL,
+    password_hash TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'membre',
+    active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS sessions (
+    token TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, expires_at INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS docs (
+    collection TEXT NOT NULL, id TEXT NOT NULL, num TEXT, data TEXT NOT NULL,
+    created_by TEXT, updated_by TEXT, updated_at TEXT NOT NULL,
+    PRIMARY KEY (collection, id)
+  );
+  CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK (id = 1), data TEXT NOT NULL);
+  CREATE TABLE IF NOT EXISTS journal (at TEXT NOT NULL, user_id TEXT, action TEXT NOT NULL, detail TEXT);
+`);
+const newId = () => crypto.randomBytes(12).toString("hex");
+const now = () => new Date().toISOString();
+const log = (user, action, detail) => db.prepare("INSERT INTO journal VALUES (?,?,?,?)").run(now(), user ? user.id : null, action, detail || null);
+
+// ---------------------------------------------------------------- Application
+const app = express();
+app.set("trust proxy", 1);
+app.disable("x-powered-by");
+app.use(express.json({ limit: "10mb" }));
+app.use((req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "SAMEORIGIN");
+  res.setHeader("Referrer-Policy", "same-origin");
+  next();
+});
+
+function readCookie(req, name) {
+  const raw = req.headers.cookie || "";
+  const m = raw.split(/;\s*/).find(c => c.startsWith(name + "="));
+  return m ? decodeURIComponent(m.slice(name.length + 1)) : null;
+}
+function setSession(res, token, maxAgeSec) {
+  res.setHeader("Set-Cookie", `cab_session=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSec}${COOKIE_SECURE ? "; Secure" : ""}`);
+}
+function auth(req, res, next) {
+  const token = readCookie(req, "cab_session");
+  if (token) {
+    const row = db.prepare(`SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ? AND s.expires_at > ? AND u.active = 1`).get(token, Date.now());
+    if (row) { req.user = row; return next(); }
+  }
+  res.status(401).json({ error: "non_connecte" });
+}
+const adminOnly = (req, res, next) => req.user.role === "admin" ? next() : res.status(403).json({ error: "reserve_admin" });
+const publicUser = u => ({ id: u.id, email: u.email, name: u.name, role: u.role, active: !!u.active });
+
+const attempts = new Map();
+function tooMany(key) {
+  const a = attempts.get(key) || { n: 0, t: Date.now() };
+  if (Date.now() - a.t > 15 * 60 * 1000) { a.n = 0; a.t = Date.now(); }
+  a.n++; attempts.set(key, a);
+  return a.n > 10;
+}
+
+// ---------------------------------------------------------------- Authentification
+app.post("/api/login", (req, res) => {
+  const email = String((req.body && req.body.email) || "").trim().toLowerCase();
+  const password = String((req.body && req.body.password) || "");
+  if (tooMany(req.ip + "|" + email)) return res.status(429).json({ error: "trop_de_tentatives" });
+  const u = db.prepare("SELECT * FROM users WHERE email = ? AND active = 1").get(email);
+  if (!u || !bcrypt.compareSync(password, u.password_hash)) return res.status(401).json({ error: "identifiants_invalides" });
+  const token = crypto.randomBytes(32).toString("hex");
+  db.prepare("INSERT INTO sessions VALUES (?,?,?)").run(token, u.id, Date.now() + SESSION_DAYS * 86400000);
+  db.prepare("DELETE FROM sessions WHERE expires_at < ?").run(Date.now());
+  setSession(res, token, SESSION_DAYS * 86400);
+  attempts.delete(req.ip + "|" + email);
+  log(u, "connexion");
+  res.json(publicUser(u));
+});
+app.post("/api/logout", (req, res) => {
+  const token = readCookie(req, "cab_session");
+  if (token) db.prepare("DELETE FROM sessions WHERE token = ?").run(token);
+  setSession(res, "", 0);
+  res.json({ ok: true });
+});
+app.get("/api/me", auth, (req, res) => res.json(publicUser(req.user)));
+app.post("/api/me/password", auth, (req, res) => {
+  const { current, next } = req.body || {};
+  if (!bcrypt.compareSync(String(current || ""), req.user.password_hash)) return res.status(400).json({ error: "mot_de_passe_actuel_incorrect" });
+  if (String(next || "").length < 8) return res.status(400).json({ error: "mot_de_passe_trop_court" });
+  db.prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(bcrypt.hashSync(String(next), 10), req.user.id);
+  res.json({ ok: true });
+});
+
+// ---------------------------------------------------------------- Données
+function allData() {
+  const out = { settings: null, users: {} };
+  COLLECTIONS.forEach(c => out[c] = db.prepare("SELECT id, data FROM docs WHERE collection = ?").all(c).map(r => Object.assign(JSON.parse(r.data), { id: r.id })));
+  const s = db.prepare("SELECT data FROM settings WHERE id = 1").get();
+  out.settings = s ? JSON.parse(s.data) : null;
+  db.prepare("SELECT id, name FROM users").all().forEach(u => out.users[u.id] = u.name);
+  return out;
+}
+app.get("/api/data", auth, (req, res) => res.json(allData()));
+
+// Numéro suivant pour devis / factures / dossiers : PREFIXE-AAAA-NNN, sans trou, attribué côté serveur.
+const PREFIX = { devis: "DEV", factures: "FAC", dossiers: "DOS" };
+function nextNum(col) {
+  const st = db.prepare("SELECT data FROM settings WHERE id = 1").get(), s = st ? JSON.parse(st.data) : {};
+  const year = new Date(Date.now() + 11 * 3600000).getUTCFullYear();
+  const pre = ((s.prefixes || {})[col] || PREFIX[col]) + "-" + year + "-";
+  const max = db.prepare("SELECT num FROM docs WHERE collection = ? AND num LIKE ?").all(col, pre + "%")
+    .reduce((a, r) => Math.max(a, parseInt(r.num.slice(pre.length), 10) || 0), 0);
+  return pre + String(max + 1).padStart(3, "0");
+}
+
+app.put("/api/docs/:col/:id", auth, (req, res) => {
+  const { col, id } = req.params;
+  if (!COLLECTIONS.includes(col) || !/^[\w-]{1,64}$/.test(id)) return res.status(400).json({ error: "requete_invalide" });
+  const body = req.body || {};
+  delete body.id;
+  const existing = db.prepare("SELECT num, data, created_by FROM docs WHERE collection = ? AND id = ?").get(col, id);
+  const tx = db.transaction(() => {
+    if (existing) {
+      const prev = JSON.parse(existing.data);
+      body.num = existing.num || body.num || null;
+      body.createdBy = prev.createdBy; body.createdAt = prev.createdAt;
+      // Une facture émise garde son numéro ; la numérotation est attribuée au moment de l'émission.
+      if (col === "factures" && !existing.num && body.statut === "emise") body.num = nextNum(col);
+    } else {
+      body.createdBy = req.user.id; body.createdAt = now();
+      body.num = null;
+      if (col === "devis" || col === "dossiers" || (col === "factures" && body.statut === "emise")) body.num = nextNum(col);
+    }
+    body.updatedAt = now(); body.updatedBy = req.user.id;
+    db.prepare(`INSERT INTO docs (collection, id, num, data, created_by, updated_by, updated_at) VALUES (?,?,?,?,?,?,?)
+      ON CONFLICT(collection, id) DO UPDATE SET num = excluded.num, data = excluded.data, updated_by = excluded.updated_by, updated_at = excluded.updated_at`)
+      .run(col, id, body.num, JSON.stringify(body), body.createdBy, req.user.id, body.updatedAt);
+  });
+  tx();
+  if (!existing) log(req.user, "creation_" + col, body.num || id);
+  res.json(Object.assign(body, { id }));
+});
+app.delete("/api/docs/:col/:id", auth, (req, res) => {
+  const { col, id } = req.params;
+  if (!COLLECTIONS.includes(col)) return res.status(400).json({ error: "requete_invalide" });
+  const row = db.prepare("SELECT num, data FROM docs WHERE collection = ? AND id = ?").get(col, id);
+  if (!row) return res.json({ ok: true });
+  // Une facture émise ne se supprime pas (obligation comptable) : on l'annule par un avoir.
+  if (col === "factures" && JSON.parse(row.data).statut === "emise") return res.status(400).json({ error: "facture_emise" });
+  db.prepare("DELETE FROM docs WHERE collection = ? AND id = ?").run(col, id);
+  log(req.user, "suppression_" + col, row.num || id);
+  res.json({ ok: true });
+});
+app.put("/api/settings", auth, adminOnly, (req, res) => {
+  db.prepare("INSERT INTO settings (id, data) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data").run(JSON.stringify(req.body || {}));
+  log(req.user, "parametres");
+  res.json({ ok: true });
+});
+
+// ---------------------------------------------------------------- Équipe
+app.get("/api/users", auth, (req, res) => res.json(db.prepare("SELECT * FROM users ORDER BY name").all().map(publicUser)));
+app.post("/api/users", auth, adminOnly, (req, res) => {
+  const { name, email, password, role } = req.body || {};
+  const e = String(email || "").trim().toLowerCase();
+  if (!name || !/^\S+@\S+\.\S+$/.test(e) || String(password || "").length < 8) return res.status(400).json({ error: "champs_invalides" });
+  if (db.prepare("SELECT 1 FROM users WHERE email = ?").get(e)) return res.status(409).json({ error: "email_deja_utilise" });
+  const id = newId();
+  db.prepare("INSERT INTO users VALUES (?,?,?,?,?,1,?)").run(id, e, String(name).trim(), bcrypt.hashSync(String(password), 10), role === "admin" ? "admin" : "membre", now());
+  log(req.user, "ajout_utilisateur", e);
+  res.json({ id });
+});
+app.patch("/api/users/:id", auth, adminOnly, (req, res) => {
+  const u = db.prepare("SELECT * FROM users WHERE id = ?").get(req.params.id);
+  if (!u) return res.status(404).json({ error: "introuvable" });
+  const { name, role, active, password } = req.body || {};
+  if (u.id === req.user.id && (active === false || role === "membre")) return res.status(400).json({ error: "impossible_sur_soi_meme" });
+  if (password && String(password).length < 8) return res.status(400).json({ error: "mot_de_passe_trop_court" });
+  if (name) db.prepare("UPDATE users SET name = ? WHERE id = ?").run(String(name).trim(), u.id);
+  if (role) db.prepare("UPDATE users SET role = ? WHERE id = ?").run(role === "admin" ? "admin" : "membre", u.id);
+  if (typeof active === "boolean") { db.prepare("UPDATE users SET active = ? WHERE id = ?").run(active ? 1 : 0, u.id); if (!active) db.prepare("DELETE FROM sessions WHERE user_id = ?").run(u.id); }
+  if (password) db.prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(bcrypt.hashSync(String(password), 10), u.id);
+  log(req.user, "modif_utilisateur", u.email);
+  res.json({ ok: true });
+});
+
+// ---------------------------------------------------------------- Export / import (administrateur)
+app.get("/api/export", auth, adminOnly, (req, res) => {
+  const d = allData(); delete d.users;
+  res.setHeader("Content-Disposition", `attachment; filename="cabinet-export-${now().slice(0, 10)}.json"`);
+  res.json(Object.assign({ format: "cabinet-avocat", version: 1, exportedAt: now() }, d));
+});
+app.post("/api/import", auth, adminOnly, (req, res) => {
+  const d = req.body || {};
+  if (d.format !== "cabinet-avocat") return res.status(400).json({ error: "format_inconnu" });
+  let n = 0;
+  db.transaction(() => {
+    COLLECTIONS.forEach(c => (d[c] || []).forEach(x => {
+      if (!x || !x.id) return;
+      const id = String(x.id).replace(/[^\w-]/g, "").slice(0, 64), body = Object.assign({}, x); delete body.id;
+      db.prepare(`INSERT INTO docs (collection, id, num, data, created_by, updated_by, updated_at) VALUES (?,?,?,?,?,?,?)
+        ON CONFLICT(collection, id) DO UPDATE SET num = excluded.num, data = excluded.data, updated_at = excluded.updated_at`)
+        .run(c, id, body.num ? String(body.num) : null, JSON.stringify(body), req.user.id, req.user.id, now());
+      n++;
+    }));
+    if (d.settings) db.prepare("INSERT INTO settings (id, data) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data").run(JSON.stringify(d.settings));
+  })();
+  log(req.user, "import", n + " documents");
+  res.json({ ok: true, documents: n });
+});
+
+// ---------------------------------------------------------------- Fichiers statiques
+app.get("/vendor/jspdf.js", (req, res) => res.sendFile(path.join(__dirname, "node_modules", "jspdf", "dist", "jspdf.umd.min.js"), { maxAge: "7d" }));
+app.use(express.static(path.join(__dirname, "public"), { index: "index.html", setHeaders(res) { res.setHeader("Cache-Control", "no-cache"); } }));
+
+// ---------------------------------------------------------------- Premier administrateur sans terminal
+// ADMIN_EMAIL + ADMIN_PASSWORD (+ ADMIN_NAME) créent le premier compte au démarrage.
+// ADMIN_RESET=true réinitialise ce compte avec ce mot de passe (mot de passe oublié).
+(function bootstrapAdmin() {
+  const email = String(process.env.ADMIN_EMAIL || "").trim().toLowerCase(), pass = String(process.env.ADMIN_PASSWORD || "");
+  if (!email || !pass) return;
+  if (pass.length < 8) { console.warn("ADMIN_PASSWORD trop court (8 caractères minimum) : compte non créé."); return; }
+  const name = process.env.ADMIN_NAME || "Administrateur";
+  const count = db.prepare("SELECT COUNT(*) AS n FROM users").get().n;
+  const u = db.prepare("SELECT id FROM users WHERE email = ?").get(email);
+  if (!count) {
+    db.prepare("INSERT INTO users VALUES (?,?,?,?,'admin',1,?)").run(newId(), email, name, bcrypt.hashSync(pass, 10), now());
+    console.log("Administrateur créé : " + email);
+  } else if (process.env.ADMIN_RESET === "true") {
+    if (u) db.prepare("UPDATE users SET password_hash = ?, role = 'admin', active = 1 WHERE id = ?").run(bcrypt.hashSync(pass, 10), u.id);
+    else db.prepare("INSERT INTO users VALUES (?,?,?,?,'admin',1,?)").run(newId(), email, name, bcrypt.hashSync(pass, 10), now());
+    db.prepare("DELETE FROM sessions WHERE user_id IN (SELECT id FROM users WHERE email = ?)").run(email);
+    console.log("Compte administrateur réinitialisé : " + email + " – pensez à retirer ADMIN_RESET.");
+  }
+})();
+
+// ---------------------------------------------------------------- Paramètres initiaux du cabinet
+// parametres-initiaux.json : chargé une seule fois, au premier démarrage, si aucun paramètre n'existe.
+(function parametresInitiaux() {
+  const f = path.join(__dirname, "parametres-initiaux.json");
+  if (!fs.existsSync(f) || db.prepare("SELECT 1 FROM settings WHERE id = 1").get()) return;
+  try {
+    const p = JSON.parse(fs.readFileSync(f, "utf8")); delete p._note;
+    db.prepare("INSERT INTO settings (id, data) VALUES (1, ?)").run(JSON.stringify(p));
+    console.log("Paramètres du cabinet initialisés : " + (p.cabinet || ""));
+  } catch (e) { console.warn("parametres-initiaux.json illisible"); }
+})();
+
+// ---------------------------------------------------------------- Sauvegarde quotidienne (30 jours)
+function backupNow() {
+  const day = new Date(Date.now() + 11 * 3600000).toISOString().slice(0, 10);
+  const root = path.join(DATA_DIR, "sauvegardes");
+  fs.mkdirSync(root, { recursive: true });
+  return db.backup(path.join(root, "cabinet-" + day + ".db")).then(() => {
+    const all = fs.readdirSync(root).filter(f => /^cabinet-\d{4}-\d{2}-\d{2}\.db$/.test(f)).sort();
+    all.slice(0, Math.max(0, all.length - 30)).forEach(f => fs.rmSync(path.join(root, f), { force: true }));
+    console.log("Sauvegarde quotidienne : " + day);
+  });
+}
+if (process.env.SAUVEGARDE_QUOTIDIENNE !== "false") {
+  let last = "";
+  setInterval(() => {
+    const t = new Date(Date.now() + 11 * 3600000), day = t.toISOString().slice(0, 10);
+    if (t.getUTCHours() === 2 && day !== last) { last = day; backupNow().catch(e => console.error("Sauvegarde échouée :", e.message)); }
+  }, 10 * 60 * 1000);
+}
+
+app.listen(PORT, () => console.log("Cabinet – gestion : http://localhost:" + PORT));

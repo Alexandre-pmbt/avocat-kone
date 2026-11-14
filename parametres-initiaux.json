@@ -1,0 +1,17 @@
+{
+  "_note": "Coordonnées du cabinet chargées au tout premier démarrage (si aucun paramètre n'existe encore). Ensuite, tout se modifie dans l'onglet Paramètres du logiciel.",
+  "cabinet": "Cabinet RODRIGUEZ DANIEL",
+  "avocat": "Maître Daniel RODRIGUEZ",
+  "titre": "Avocat",
+  "adresse": "Immeuble Henriot – 169 rue Pierre Chivot",
+  "ville": "98860 Koné",
+  "tel": "+687 99 97 08",
+  "email": "avocat.rodriguez@proton.me",
+  "ridet": "1660851",
+  "rib": "",
+  "tgc": 11,
+  "delai": 30,
+  "validite": 30,
+  "mentions": "",
+  "logo": ""
+}
