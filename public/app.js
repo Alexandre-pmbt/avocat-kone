@@ -251,7 +251,7 @@ async function convertDemande(d) {
   let c = D.clients.find(c => norm(c.nom) === norm(d.nom) && norm(c.prenom) === norm(d.prenom) && ((d.tel && c.tel === d.tel) || (d.email && norm(c.email) === norm(d.email))));
   if (!c) c = await save("clients", { id: uid(), type: "particulier", civilite: "", nom: d.nom, prenom: d.prenom, tel: d.tel, email: d.email, adresse: "", notes: "" });
   const dos = await save("dossiers", {
-    id: uid(), intitule: (d.domaine && d.domaine !== "Autre" ? d.domaine + " – " : "") + clientName(c), clientId: c.id, domaine: d.domaine || "", statut: "ouvert",
+    id: uid(), intitule: (d.domaine && d.domaine !== "Autre" ? d.domaine + " – " : "") + clientName(c), clientId: c.id, domaine: d.domaine || "", statut: "ouvert", premierContact: d.date || "",
     ouverture: today(), resume: d.objet || "", echeances: d.rdv ? [{ id: uid(), date: d.rdv, heure: d.rdvHeure || "", libelle: "Premier rendez-vous", fait: false }] : [],
     journal: [{ id: uid(), date: today(), texte: "Dossier ouvert depuis la demande du " + fdate(d.date) + (d.notes ? " – " + d.notes : "") }], temps: [], honoraires: "forfait", taux: ""
   });
@@ -325,13 +325,14 @@ function vDossiers(el) {
   <div class="filters"><div class="chips">${Object.entries(F).map(([k, v]) => `<button class="chip ${k === dosFilter ? "on" : ""}" data-f="${k}">${v[0]} (${D.dossiers.filter(v[1]).length})</button>`).join("")}</div>
     <input id="oq" placeholder="N°, client, partie adverse, n° RG…" value="${esc(dosQ)}"></div>
   <div class="card" style="padding:6px 8px">${list.length ? `<table>
-    <tr><th>N°</th><th>Dossier</th><th>Client</th><th>Prochaine échéance</th><th class="num">Convention</th><th class="num">Réglé</th><th class="num">Solde</th><th>Statut</th></tr>
+    <tr><th>N°</th><th>Dossier</th><th>Client</th><th>1er contact</th><th>Prochaine échéance</th><th class="num">Convention</th><th class="num">Payé à ce jour</th><th class="num">Solde</th><th>Statut</th></tr>
     ${list.map(d => { const e = nextEch(d), reg = dosRegle(d), sol = dosSolde(d); return `<tr class="click" onclick="go('dossier/${d.id}')">
       <td style="white-space:nowrap"><b>${esc(d.num)}</b></td><td><b>${esc(d.intitule)}</b><div class="small muted">${esc([d.etape, d.domaine, d.adverse ? "c/ " + d.adverse : ""].filter(Boolean).join(" · "))}</div></td>
       <td>${esc(clientName(client(d.clientId)))}</td>
+      <td style="white-space:nowrap">${d.premierContact ? fdate(d.premierContact) : '<span class="muted">—</span>'}</td>
       <td>${e ? `<span class="${daysTo(e.date) < 0 ? "late" : daysTo(e.date) <= 7 ? "soon" : ""}">${fdate(e.date)}</span><div class="small muted">${esc(e.libelle)}</div>` : '<span class="muted">—</span>'}</td>
-      <td class="num">${num(d.conventionMontant) ? money(num(d.conventionMontant)) : d.honoraires === "assurance" ? '<span class="small muted">Assurance</span>' : "—"}</td><td class="num">${reg ? money(reg) : "—"}</td><td class="num ${sol ? "late" : ""}">${sol ? money(sol) : "—"}</td><td>${tag(ST_DOS, d.statut)}</td></tr>`; }).join("")}
-    <tr><td colspan="4" class="muted">Total</td><td class="num"><b>${money(list.reduce((a, d) => a + num(d.conventionMontant), 0))}</b></td><td class="num"><b>${money(list.reduce((a, d) => a + dosRegle(d), 0))}</b></td><td class="num"><b>${money(list.reduce((a, d) => a + dosSolde(d), 0))}</b></td><td></td></tr>
+      <td class="num">${num(d.conventionMontant) ? money(num(d.conventionMontant)) : d.honoraires === "assurance" ? '<span class="small muted">Assurance</span>' : "—"}</td><td class="num">${reg ? `<b>${money(reg)}</b>${paysOf(d).map(p => `<div class="small muted">${p.date ? fdate(p.date) : "date ?"} : ${money(p.montant)}</div>`).join("")}` : "—"}</td><td class="num ${sol ? "late" : ""}">${sol ? money(sol) : "—"}</td><td>${tag(ST_DOS, d.statut)}</td></tr>`; }).join("")}
+    <tr><td colspan="5" class="muted">Total</td><td class="num"><b>${money(list.reduce((a, d) => a + num(d.conventionMontant), 0))}</b></td><td class="num"><b>${money(list.reduce((a, d) => a + dosRegle(d), 0))}</b></td><td class="num"><b>${money(list.reduce((a, d) => a + dosSolde(d), 0))}</b></td><td></td></tr>
   </table>` : `<div class="empty">Aucun dossier</div>`}</div>`;
   $$(".chip", el).forEach(b => b.onclick = () => { dosFilter = b.dataset.f; vDossiers(el); });
   const inp = $("#oq", el); inp.oninput = () => { dosQ = inp.value; vDossiers(el); const n = $("#oq", el); n.focus(); n.setSelectionRange(n.value.length, n.value.length); };
@@ -339,8 +340,11 @@ function vDossiers(el) {
 const HON = { forfait: "Forfait", horaire: "Au temps passé", resultat: "Forfait + honoraire de résultat", aj: "Aide juridictionnelle", assurance: "Protection juridique (assurance)" };
 // Honoraires d'un dossier : convention, règlements reçus (acomptes hors facture + règlements de ses factures), solde.
 const dosRegle = d => (d.reglements || []).reduce((a, r) => a + num(r.montant), 0) + D.factures.filter(f => f.dossierId === d.id && !f.avoir).reduce((a, f) => a + paid(f), 0);
+const paysOf = d => (d.reglements || []).map(r => ({ date: r.date, montant: num(r.montant) }))
+  .concat(D.factures.filter(f => f.dossierId === d.id && !f.avoir).flatMap(f => (f.paiements || []).map(p => ({ date: p.date, montant: num(p.montant) }))))
+  .sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
 const dosSolde = d => num(d.conventionMontant) ? Math.max(0, num(d.conventionMontant) - dosRegle(d)) : 0;
-const numCmp = (a, b) => ((parseInt(b.num, 10) || 0) - (parseInt(a.num, 10) || 0)) || String(b.num || "").localeCompare(String(a.num || ""));
+const numCmp = (a, b) => ((parseInt(a.num, 10) || 0) - (parseInt(b.num, 10) || 0)) || String(a.num || "").localeCompare(String(b.num || ""));
 const nextEch = d => (d.echeances || []).filter(e => !e.fait && e.date).sort((a, b) => a.date.localeCompare(b.date))[0];
 
 function editDossier(id, clientId) {
@@ -360,6 +364,7 @@ function editDossier(id, clientId) {
       <div class="f"><label>Avocat adverse</label><input name="avocatAdverse" value="${esc(d.avocatAdverse)}"></div>
       <div class="f s4"><label>Juridiction</label><input name="juridiction" list="jl" value="${esc(d.juridiction)}"><datalist id="jl">${JURIDICTIONS.map(j => `<option>${esc(j)}</option>`).join("")}</datalist></div>
       <div class="f"><label>N° RG / référence</label><input name="rg" value="${esc(d.rg)}"></div>
+      <div class="f"><label>Date de premier contact</label><input name="premierContact" type="date" value="${esc(d.premierContact)}"></div>
       <div class="f"><label>Ouvert le</label><input name="ouverture" type="date" value="${esc(d.ouverture)}"></div>
       <div class="sec">Honoraires</div>
       <div class="f"><label>Mode</label><select name="honoraires">${opts(HON, d.honoraires)}</select></div>
@@ -402,6 +407,7 @@ function vDossier(el, id) {
       ${d.adverse ? `<dt>Partie adverse</dt><dd>${esc(d.adverse)}${d.avocatAdverse ? `<div class="small muted">Conseil : ${esc(d.avocatAdverse)}</div>` : ""}</dd>` : ""}
       ${d.juridiction ? `<dt>Juridiction</dt><dd>${esc(d.juridiction)}${d.rg ? ` – RG ${esc(d.rg)}` : ""}</dd>` : d.rg ? `<dt>Référence</dt><dd>${esc(d.rg)}</dd>` : ""}
       ${d.etape ? `<dt>Situation</dt><dd><b>${esc(d.etape)}</b></dd>` : ""}
+      <dt>Premier contact</dt><dd>${d.premierContact ? fdate(d.premierContact) : '<span class="muted">—</span>'}</dd>
       ${d.ouverture ? `<dt>Ouvert le</dt><dd>${fdate(d.ouverture)}</dd>` : ""}
       ${facTot ? `<dt>Facturé / encaissé</dt><dd>${money(facTot)} / ${money(encTot)}</dd>` : ""}
     </dl>${d.resume ? `<p style="white-space:pre-wrap;margin:14px 0 0">${esc(d.resume)}</p>` : ""}</div>
@@ -409,7 +415,7 @@ function vDossier(el, id) {
       <dl class="kv">
         <dt>Mode</dt><dd>${esc(HON[d.honoraires] || "—")}${d.aj ? ` – ${esc(d.aj)}` : ""}${d.taux && d.honoraires === "horaire" ? ` – ${money(num(d.taux))} HT / h` : ""}</dd>
         <dt>Convention</dt><dd>${num(d.conventionMontant) ? money(num(d.conventionMontant)) : "—"}${d.conventionDate ? ` <span class="small muted">signée le ${fdate(d.conventionDate)}</span>` : d.conventionNote ? ` <span class="small muted">${esc(d.conventionNote)}</span>` : ""}</dd>
-        <dt>Déjà réglé</dt><dd>${money(dosRegle(d))}</dd>
+        <dt>Payé à ce jour</dt><dd><b>${money(dosRegle(d))}</b></dd>
         ${num(d.conventionMontant) ? `<dt>Solde dû</dt><dd class="${dosSolde(d) ? "late" : ""}"><b>${money(dosSolde(d))}</b>${dosSolde(d) ? "" : ' <span class="tag ok">Soldé</span>'}</dd>` : ""}
       </dl>
       ${(d.reglements || []).length ? `<table style="margin-top:10px">${d.reglements.map(r => `<tr><td style="white-space:nowrap">${r.date ? fdate(r.date) : '<span class="muted">date ?</span>'}</td><td>${esc([r.mode, r.ref].filter(Boolean).join(" – "))}</td><td class="num">${money(num(r.montant))}</td><td class="num"><button class="btn sm ghost" data-delreg="${r.id}">×</button></td></tr>`).join("")}</table>` : ""}
