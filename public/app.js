@@ -45,7 +45,7 @@ function toast(msg) {
   const t = document.createElement("div"); t.className = "toast"; t.textContent = msg; document.body.appendChild(t);
   setTimeout(() => t.remove(), 2600);
 }
-const ERR = { facture_emise: "Une facture émise ne peut pas être supprimée : établissez un avoir.", reserve_admin: "Réservé à l'avocat (administrateur).", email_deja_utilise: "Cette adresse e-mail est déjà utilisée.", champs_invalides: "Vérifiez le nom, l'e-mail et le mot de passe (8 caractères minimum).", mot_de_passe_trop_court: "Mot de passe trop court (8 caractères minimum).", mot_de_passe_actuel_incorrect: "Mot de passe actuel incorrect.", format_inconnu: "Ce fichier n'est pas une sauvegarde du logiciel." };
+const ERR = { facture_emise: "Une facture émise ne peut pas être supprimée : établissez un avoir.", reserve_admin: "Réservé à l'avocat (administrateur).", email_deja_utilise: "Cette adresse e-mail est déjà utilisée.", champs_invalides: "Vérifiez le nom, l'e-mail et le mot de passe (8 caractères minimum).", mot_de_passe_trop_court: "Mot de passe trop court (8 caractères minimum).", mot_de_passe_actuel_incorrect: "Mot de passe actuel incorrect.", format_inconnu: "Ce fichier n'est pas une sauvegarde du logiciel.", numero_deja_utilise: "Ce numéro de dossier est déjà utilisé." };
 const fail = e => { if (e.message !== "non_connecte") alert(ERR[e.message] || "Erreur : " + e.message); };
 
 // ============================================================ Référentiels
@@ -154,7 +154,9 @@ function vDashboard(el) {
   const imp = D.factures.filter(f => reste(f) > 0);
   const totImp = imp.reduce((a, f) => a + reste(f), 0), retard = imp.filter(f => f.echeance && daysTo(f.echeance) < 0);
   const y = today().slice(0, 4);
-  const enc = D.factures.reduce((a, f) => a + (f.paiements || []).filter(p => (p.date || "").startsWith(y)).reduce((s, p) => s + num(p.montant), 0), 0);
+  const enc = D.factures.reduce((a, f) => a + (f.paiements || []).filter(p => (p.date || "").startsWith(y)).reduce((s, p) => s + num(p.montant), 0), 0)
+    + D.dossiers.reduce((a, d) => a + (d.reglements || []).filter(r => (r.date || "").startsWith(y)).reduce((s, r) => s + num(r.montant), 0), 0);
+  const soldes = actifs.filter(d => dosSolde(d) > 0), totSol = soldes.reduce((a, d) => a + dosSolde(d), 0);
   const devAtt = D.devis.filter(d => d.statut === "envoye");
   el.innerHTML = `
   <div class="head"><h1>Tableau de bord</h1><div class="sp"></div>
@@ -162,8 +164,9 @@ function vDashboard(el) {
   <div class="grid kpis">
     <div class="card kpi"><div class="l">Demandes à traiter</div><div class="v">${dem.length}</div><div class="s">${dem.filter(d => d.urgence === "urgente").length} urgente(s)</div></div>
     <div class="card kpi"><div class="l">Dossiers en cours</div><div class="v">${actifs.length}</div><div class="s">${D.dossiers.length - actifs.length} clos</div></div>
-    <div class="card kpi"><div class="l">Reste à encaisser</div><div class="v">${money(totImp)}</div><div class="s">${retard.length} facture(s) en retard</div></div>
-    <div class="card kpi"><div class="l">Encaissé en ${y}</div><div class="v">${money(enc)}</div><div class="s">TTC</div></div>
+    <div class="card kpi"><div class="l">Soldes d'honoraires dus</div><div class="v">${money(totSol)}</div><div class="s">${soldes.length} dossier(s) – conventions</div></div>
+    <div class="card kpi"><div class="l">Factures à encaisser</div><div class="v">${money(totImp)}</div><div class="s">${retard.length} facture(s) en retard</div></div>
+    <div class="card kpi"><div class="l">Encaissé en ${y}</div><div class="v">${money(enc)}</div><div class="s">Règlements datés</div></div>
     <div class="card kpi"><div class="l">Devis en attente</div><div class="v">${devAtt.length}</div><div class="s">${money(devAtt.reduce((a, d) => a + totals(d).ttc, 0))}</div></div>
   </div>
   <div class="grid two" style="margin-top:16px">
@@ -175,6 +178,8 @@ function vDashboard(el) {
       <tr class="click" onclick="editDemande('${d.id}')"><td style="white-space:nowrap">${fdate(d.date)}</td><td><b>${esc((d.nom || "").toUpperCase())} ${esc(d.prenom)}</b> ${d.urgence === "urgente" ? '<span class="tag bad">Urgent</span>' : ""}<div class="small muted">${esc((d.objet || "").slice(0, 90))}</div></td><td>${tag(ST_DEM, d.statut)}</td></tr>`).join("")}</table>` : `<div class="empty">Tout est traité</div>`}</div>
     <div class="card"><h2>Factures à encaisser</h2>${imp.length ? `<table>${imp.sort((a, b) => (a.echeance || "").localeCompare(b.echeance || "")).slice(0, 10).map(f => `
       <tr class="click" onclick="go('facture/${f.id}')"><td>${esc(f.num)}</td><td>${esc(clientName(client(f.clientId)))}</td><td class="${f.echeance && daysTo(f.echeance) < 0 ? "late" : ""}">${fdate(f.echeance)}</td><td class="num">${money(reste(f))}</td></tr>`).join("")}</table>` : `<div class="empty">Aucune facture en attente</div>`}</div>
+    <div class="card"><h2>Soldes d'honoraires à encaisser</h2>${soldes.length ? `<table>${soldes.sort((a, b) => dosSolde(b) - dosSolde(a)).slice(0, 10).map(d => `
+      <tr class="click" onclick="go('dossier/${d.id}')"><td><b>${esc(d.num)}</b></td><td>${esc(d.intitule)}<div class="small muted">${esc(d.etape || "")}</div></td><td class="num late">${money(dosSolde(d))}</td></tr>`).join("")}</table>` : `<div class="empty">Aucun solde en attente</div>`}</div>
     <div class="card"><h2>Derniers dossiers</h2>${actifs.length ? `<table>${actifs.sort(byDesc("updatedAt")).slice(0, 8).map(d => `
       <tr class="click" onclick="go('dossier/${d.id}')"><td>${esc(d.num)}</td><td>${esc(d.intitule)}<div class="small muted">${esc(clientName(client(d.clientId)))}</div></td><td>${tag(ST_DOS, d.statut)}</td></tr>`).join("")}</table>` : `<div class="empty">Aucun dossier</div>`}</div>
   </div>`;
@@ -265,7 +270,7 @@ function vClients(el) {
   <div class="filters"><input id="cq" placeholder="Rechercher…" value="${esc(cliQ)}"></div>
   <div class="card" style="padding:6px 8px">${list.length ? `<table>
     <tr><th>Client</th><th>Téléphone</th><th>E-mail</th><th class="num">Dossiers</th><th class="num">Reste dû</th></tr>
-    ${list.map(c => { const due = D.factures.filter(f => f.clientId === c.id).reduce((a, f) => a + reste(f), 0); return `<tr class="click" onclick="editClient('${c.id}')">
+    ${list.map(c => { const due = D.factures.filter(f => f.clientId === c.id).reduce((a, f) => a + reste(f), 0) + D.dossiers.filter(d => d.clientId === c.id).reduce((a, d) => a + dosSolde(d), 0); return `<tr class="click" onclick="editClient('${c.id}')">
       <td><b>${esc(clientName(c))}</b>${c.type === "societe" && c.nom ? `<div class="small muted">Représentée par ${esc(c.prenom)} ${esc(c.nom)}</div>` : ""}</td><td>${esc(c.tel)}</td><td>${esc(c.email)}</td>
       <td class="num">${D.dossiers.filter(d => d.clientId === c.id).length}</td><td class="num ${due ? "late" : ""}">${due ? money(due) : "—"}</td></tr>`; }).join("")}
   </table>` : `<div class="empty">Aucun client</div>`}</div>`;
@@ -314,22 +319,28 @@ let dosFilter = "actifs", dosQ = "";
 function vDossiers(el) {
   const F = { actifs: ["En cours", d => d.statut !== "clos"], clos: ["Clos", d => d.statut === "clos"], tous: ["Tous", () => true] };
   const q = norm(dosQ);
-  const list = D.dossiers.filter(F[dosFilter][1]).filter(d => !q || norm([d.num, d.intitule, clientName(client(d.clientId)), d.adverse, d.rg, d.domaine].join(" ")).includes(q)).sort(byDesc("num"));
+  const list = D.dossiers.filter(F[dosFilter][1]).filter(d => !q || norm([d.num, d.intitule, clientName(client(d.clientId)), d.adverse, d.rg, d.domaine, d.etape].join(" ")).includes(q)).sort(numCmp);
   el.innerHTML = `
   <div class="head"><h1>Dossiers</h1><div class="sp"></div><button class="btn pri" onclick="editDossier()">+ Nouveau dossier</button></div>
   <div class="filters"><div class="chips">${Object.entries(F).map(([k, v]) => `<button class="chip ${k === dosFilter ? "on" : ""}" data-f="${k}">${v[0]} (${D.dossiers.filter(v[1]).length})</button>`).join("")}</div>
     <input id="oq" placeholder="N°, client, partie adverse, n° RG…" value="${esc(dosQ)}"></div>
   <div class="card" style="padding:6px 8px">${list.length ? `<table>
-    <tr><th>N°</th><th>Dossier</th><th>Client</th><th>Prochaine échéance</th><th class="num">Facturé</th><th>Statut</th></tr>
-    ${list.map(d => { const e = nextEch(d), fac = D.factures.filter(f => f.dossierId === d.id && f.statut === "emise").reduce((a, f) => a + totals(f).ttc, 0); return `<tr class="click" onclick="go('dossier/${d.id}')">
-      <td style="white-space:nowrap">${esc(d.num)}</td><td><b>${esc(d.intitule)}</b><div class="small muted">${esc([d.domaine, d.adverse ? "c/ " + d.adverse : ""].filter(Boolean).join(" · "))}</div></td>
+    <tr><th>N°</th><th>Dossier</th><th>Client</th><th>Prochaine échéance</th><th class="num">Convention</th><th class="num">Réglé</th><th class="num">Solde</th><th>Statut</th></tr>
+    ${list.map(d => { const e = nextEch(d), reg = dosRegle(d), sol = dosSolde(d); return `<tr class="click" onclick="go('dossier/${d.id}')">
+      <td style="white-space:nowrap"><b>${esc(d.num)}</b></td><td><b>${esc(d.intitule)}</b><div class="small muted">${esc([d.etape, d.domaine, d.adverse ? "c/ " + d.adverse : ""].filter(Boolean).join(" · "))}</div></td>
       <td>${esc(clientName(client(d.clientId)))}</td>
       <td>${e ? `<span class="${daysTo(e.date) < 0 ? "late" : daysTo(e.date) <= 7 ? "soon" : ""}">${fdate(e.date)}</span><div class="small muted">${esc(e.libelle)}</div>` : '<span class="muted">—</span>'}</td>
-      <td class="num">${fac ? money(fac) : "—"}</td><td>${tag(ST_DOS, d.statut)}</td></tr>`; }).join("")}
+      <td class="num">${num(d.conventionMontant) ? money(num(d.conventionMontant)) : d.honoraires === "assurance" ? '<span class="small muted">Assurance</span>' : "—"}</td><td class="num">${reg ? money(reg) : "—"}</td><td class="num ${sol ? "late" : ""}">${sol ? money(sol) : "—"}</td><td>${tag(ST_DOS, d.statut)}</td></tr>`; }).join("")}
+    <tr><td colspan="4" class="muted">Total</td><td class="num"><b>${money(list.reduce((a, d) => a + num(d.conventionMontant), 0))}</b></td><td class="num"><b>${money(list.reduce((a, d) => a + dosRegle(d), 0))}</b></td><td class="num"><b>${money(list.reduce((a, d) => a + dosSolde(d), 0))}</b></td><td></td></tr>
   </table>` : `<div class="empty">Aucun dossier</div>`}</div>`;
   $$(".chip", el).forEach(b => b.onclick = () => { dosFilter = b.dataset.f; vDossiers(el); });
   const inp = $("#oq", el); inp.oninput = () => { dosQ = inp.value; vDossiers(el); const n = $("#oq", el); n.focus(); n.setSelectionRange(n.value.length, n.value.length); };
 }
+const HON = { forfait: "Forfait", horaire: "Au temps passé", resultat: "Forfait + honoraire de résultat", aj: "Aide juridictionnelle", assurance: "Protection juridique (assurance)" };
+// Honoraires d'un dossier : convention, règlements reçus (acomptes hors facture + règlements de ses factures), solde.
+const dosRegle = d => (d.reglements || []).reduce((a, r) => a + num(r.montant), 0) + D.factures.filter(f => f.dossierId === d.id && !f.avoir).reduce((a, f) => a + paid(f), 0);
+const dosSolde = d => num(d.conventionMontant) ? Math.max(0, num(d.conventionMontant) - dosRegle(d)) : 0;
+const numCmp = (a, b) => ((parseInt(b.num, 10) || 0) - (parseInt(a.num, 10) || 0)) || String(b.num || "").localeCompare(String(a.num || ""));
 const nextEch = d => (d.echeances || []).filter(e => !e.fait && e.date).sort((a, b) => a.date.localeCompare(b.date))[0];
 
 function editDossier(id, clientId) {
@@ -338,8 +349,10 @@ function editDossier(id, clientId) {
   modal(`
     <h2>${id ? "Dossier " + esc(d.num) : "Nouveau dossier"}</h2>
     <div class="form">
-      <div class="f s4"><label>Intitulé *</label><input name="intitule" value="${esc(d.intitule)}" placeholder="Ex. : Divorce DUPONT / MARTIN"></div>
+      <div class="f s1"><label>N° dossier</label><input name="num" value="${esc(d.num)}" placeholder="${id ? "" : "Auto"}"></div>
+      <div class="f s3"><label>Intitulé *</label><input name="intitule" value="${esc(d.intitule)}" placeholder="Ex. : Divorce DUPONT / MARTIN"></div>
       <div class="f"><label>Statut</label><select name="statut">${opts(ST_DOS, d.statut)}</select></div>
+      <div class="f s6"><label>Situation du dossier</label><input name="etape" list="etl" value="${esc(d.etape)}" placeholder="Ex. : 1ère instance, Appel, Mise en état, Attente jugement…"><datalist id="etl">${["Consultation", "Convention", "En cours", "Mise en état", "1ère instance", "Jugé en première instance", "Appel", "Attente appel CA", "Liquidation", "Exécution", "Prise en charge par l'assurance"].map(x => `<option>${x}</option>`).join("")}</datalist></div>
       <div class="f s4"><label>Client *</label><select name="clientId">${clientOpts(d.clientId)}</select></div>
       <div class="f"><label>&nbsp;</label><button class="btn" type="button" id="nc">+ Nouveau client</button></div>
       <div class="f"><label>Domaine</label><select name="domaine">${listOpts(s.domaines, d.domaine, "—")}</select></div>
@@ -348,7 +361,11 @@ function editDossier(id, clientId) {
       <div class="f s4"><label>Juridiction</label><input name="juridiction" list="jl" value="${esc(d.juridiction)}"><datalist id="jl">${JURIDICTIONS.map(j => `<option>${esc(j)}</option>`).join("")}</datalist></div>
       <div class="f"><label>N° RG / référence</label><input name="rg" value="${esc(d.rg)}"></div>
       <div class="f"><label>Ouvert le</label><input name="ouverture" type="date" value="${esc(d.ouverture)}"></div>
-      <div class="f"><label>Honoraires</label><select name="honoraires">${opts({ forfait: "Forfait", horaire: "Au temps passé", resultat: "Forfait + honoraire de résultat", aj: "Aide juridictionnelle" }, d.honoraires)}</select></div>
+      <div class="sec">Honoraires</div>
+      <div class="f"><label>Mode</label><select name="honoraires">${opts(HON, d.honoraires)}</select></div>
+      <div class="f"><label>Montant de la convention (F)</label><input name="conventionMontant" inputmode="numeric" value="${esc(d.conventionMontant)}"></div>
+      <div class="f"><label>Convention signée le</label><input name="conventionDate" type="date" value="${esc(d.conventionDate)}"></div>
+      <div class="f"><label>Aide juridictionnelle</label><select name="aj">${listOpts(["", "AJ", "AJMP", "AJP"], d.aj)}</select></div>
       <div class="f"><label>Taux horaire HT (F)</label><input name="taux" inputmode="numeric" value="${esc(d.taux || s.tauxHoraire || "")}"></div>
       <div class="f s6"><label>Résumé de l'affaire</label><textarea name="resume">${esc(d.resume)}</textarea></div>
     </div>
@@ -357,6 +374,7 @@ function editDossier(id, clientId) {
     $("#nc", m).onclick = () => editClient(null, c => { $("[name=clientId]", m).innerHTML = clientOpts(c.id); });
     $("#ok", m).onclick = async () => {
       const f = readForm(m); if (!f.intitule || !f.clientId) return alert("L'intitulé et le client sont obligatoires.");
+      f.conventionMontant = f.conventionMontant ? num(f.conventionMontant) : "";
       try { const s = await save("dossiers", Object.assign(d, f)); close(); toast(id ? "Dossier enregistré" : "Dossier " + s.num + " ouvert"); id ? render() : go("dossier/" + s.id); } catch (e) { fail(e); }
     };
     if ($("#del", m)) $("#del", m).onclick = async () => {
@@ -383,10 +401,19 @@ function vDossier(el, id) {
       ${d.domaine ? `<dt>Domaine</dt><dd>${esc(d.domaine)}</dd>` : ""}
       ${d.adverse ? `<dt>Partie adverse</dt><dd>${esc(d.adverse)}${d.avocatAdverse ? `<div class="small muted">Conseil : ${esc(d.avocatAdverse)}</div>` : ""}</dd>` : ""}
       ${d.juridiction ? `<dt>Juridiction</dt><dd>${esc(d.juridiction)}${d.rg ? ` – RG ${esc(d.rg)}` : ""}</dd>` : d.rg ? `<dt>Référence</dt><dd>${esc(d.rg)}</dd>` : ""}
-      <dt>Ouvert le</dt><dd>${fdate(d.ouverture)}</dd>
-      <dt>Honoraires</dt><dd>${esc({ forfait: "Forfait", horaire: "Au temps passé", resultat: "Forfait + résultat", aj: "Aide juridictionnelle" }[d.honoraires] || "—")}${d.taux ? ` – ${money(num(d.taux))} HT / h` : ""}</dd>
-      <dt>Facturé / encaissé</dt><dd>${money(facTot)} / ${money(encTot)}</dd>
+      ${d.etape ? `<dt>Situation</dt><dd><b>${esc(d.etape)}</b></dd>` : ""}
+      ${d.ouverture ? `<dt>Ouvert le</dt><dd>${fdate(d.ouverture)}</dd>` : ""}
+      ${facTot ? `<dt>Facturé / encaissé</dt><dd>${money(facTot)} / ${money(encTot)}</dd>` : ""}
     </dl>${d.resume ? `<p style="white-space:pre-wrap;margin:14px 0 0">${esc(d.resume)}</p>` : ""}</div>
+    <div class="card"><div class="head" style="margin-bottom:8px"><h2 style="margin:0">Honoraires et règlements</h2><div class="sp"></div><button class="btn sm pri" id="ar">+ Règlement reçu</button></div>
+      <dl class="kv">
+        <dt>Mode</dt><dd>${esc(HON[d.honoraires] || "—")}${d.aj ? ` – ${esc(d.aj)}` : ""}${d.taux && d.honoraires === "horaire" ? ` – ${money(num(d.taux))} HT / h` : ""}</dd>
+        <dt>Convention</dt><dd>${num(d.conventionMontant) ? money(num(d.conventionMontant)) : "—"}${d.conventionDate ? ` <span class="small muted">signée le ${fdate(d.conventionDate)}</span>` : d.conventionNote ? ` <span class="small muted">${esc(d.conventionNote)}</span>` : ""}</dd>
+        <dt>Déjà réglé</dt><dd>${money(dosRegle(d))}</dd>
+        ${num(d.conventionMontant) ? `<dt>Solde dû</dt><dd class="${dosSolde(d) ? "late" : ""}"><b>${money(dosSolde(d))}</b>${dosSolde(d) ? "" : ' <span class="tag ok">Soldé</span>'}</dd>` : ""}
+      </dl>
+      ${(d.reglements || []).length ? `<table style="margin-top:10px">${d.reglements.map(r => `<tr><td style="white-space:nowrap">${r.date ? fdate(r.date) : '<span class="muted">date ?</span>'}</td><td>${esc([r.mode, r.ref].filter(Boolean).join(" – "))}</td><td class="num">${money(num(r.montant))}</td><td class="num"><button class="btn sm ghost" data-delreg="${r.id}">×</button></td></tr>`).join("")}</table>` : ""}
+      ${facts.some(f => paid(f) > 0) ? `<div class="small muted" style="margin-top:6px">Inclut les règlements enregistrés sur les factures du dossier.</div>` : ""}</div>
     <div class="card"><div class="head" style="margin-bottom:8px"><h2 style="margin:0">Échéances et audiences</h2><div class="sp"></div><button class="btn sm" id="ae">+ Ajouter</button></div>
       ${ech.length ? `<table>${ech.map(e => { const n = daysTo(e.date); return `<tr><td style="width:26px"><input type="checkbox" data-ech="${e.id}" ${e.fait ? "checked" : ""} title="Fait"></td>
         <td style="white-space:nowrap" class="${e.fait ? "muted" : n < 0 ? "late" : n <= 7 ? "soon" : ""}">${fdate(e.date)} ${esc(e.heure || "")}</td><td class="${e.fait ? "muted" : ""}" style="${e.fait ? "text-decoration:line-through" : ""}">${esc(e.libelle)}</td>
@@ -409,6 +436,17 @@ function vDossier(el, id) {
   $("#jt").onkeydown = e => { if (e.key === "Enter") $("#aj").click(); };
   $$("[data-ech]").forEach(cb => cb.onchange = () => upd(o => { const e = o.echeances.find(x => x.id === cb.dataset.ech); e.fait = cb.checked; }));
   $$("[data-delech]").forEach(b => b.onclick = () => confirm("Supprimer cette échéance ?") && upd(o => o.echeances = o.echeances.filter(x => x.id !== b.dataset.delech)));
+  $$("[data-delreg]").forEach(b => b.onclick = () => confirm("Supprimer ce règlement ?") && upd(o => o.reglements = o.reglements.filter(x => x.id !== b.dataset.delreg)));
+  $("#ar").onclick = () => modal(`<h2>Règlement reçu – dossier ${esc(d.num)}</h2><div class="form">
+      <div class="f"><label>Date</label><input name="date" type="date" value="${today()}"></div>
+      <div class="f"><label>Montant (F) *</label><input name="montant" inputmode="numeric" value="${dosSolde(d) || ""}"></div>
+      <div class="f"><label>Mode</label><select name="mode">${listOpts(["Virement", "Chèque", "Espèces", "Carte bancaire", "Aide juridictionnelle", "Assurance"], "Virement")}</select></div>
+      <div class="f s6"><label>Libellé / référence</label><input name="ref" placeholder="Acompte, solde, n° de chèque…"></div></div>
+      <div class="small muted" style="margin-top:8px">Pour un règlement lié à une facture émise, enregistrez-le plutôt sur la facture.</div>
+      <div class="actions"><div class="sp"></div><button class="btn ghost" id="c">Annuler</button><button class="btn pri" id="o">Enregistrer</button></div>`, (m, close) => {
+    $("#c", m).onclick = close;
+    $("#o", m).onclick = () => { const f = readForm(m); f.montant = num(f.montant); if (!f.montant) return alert("Montant obligatoire."); close(); upd(o => (o.reglements = o.reglements || []).push(Object.assign({ id: uid() }, f)), "Règlement enregistré"); };
+  });
   $$("[data-deltps]").forEach(b => b.onclick = () => confirm("Supprimer cette saisie ?") && upd(o => o.temps = o.temps.filter(x => x.id !== b.dataset.deltps)));
   $("#ae").onclick = () => modal(`<h2>Nouvelle échéance</h2><div class="form">
       <div class="f"><label>Date *</label><input name="date" type="date" value="${today()}"></div><div class="f"><label>Heure</label><input name="heure" type="time"></div>

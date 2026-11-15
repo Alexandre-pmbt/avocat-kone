@@ -1,0 +1,487 @@
+{
+ "_note": "Dossiers repris du tableau « Situation des règlements 2026 », insérés une seule fois au démarrage.",
+ "lot": "reglements-2026-v1",
+ "dossiers": [
+  {
+   "num": "1",
+   "client": {
+    "type": "particulier",
+    "nom": "PILGRIN",
+    "prenom": "Hélène (épouse LUBIN)",
+    "civilite": "",
+    "tel": "92 84 50",
+    "email": ""
+   },
+   "dossier": {
+    "intitule": "PILGRIN Hélène (épouse LUBIN)",
+    "statut": "en_cours",
+    "etape": "En cours",
+    "domaine": "",
+    "ouverture": "",
+    "resume": "",
+    "honoraires": "forfait",
+    "taux": "",
+    "aj": "",
+    "conventionMontant": 400000,
+    "conventionDate": "",
+    "conventionNote": "",
+    "reglements": [
+     {
+      "id": "71f917a4c137",
+      "date": "",
+      "montant": 250000,
+      "mode": "",
+      "ref": "Acompte (reprise du tableau)"
+     }
+    ],
+    "echeances": [],
+    "journal": [
+     {
+      "id": "6959fd0f5449",
+      "date": "2026-11-15",
+      "texte": "Reprise du tableau de suivi des règlements 2026 – Observations : Voir audience (courrier)"
+     }
+    ],
+    "temps": []
+   }
+  },
+  {
+   "num": "2",
+   "client": {
+    "type": "particulier",
+    "nom": "CLAYTON",
+    "prenom": "Valette",
+    "civilite": "",
+    "tel": "92 80 50",
+    "email": ""
+   },
+   "dossier": {
+    "intitule": "CLAYTON Valette",
+    "statut": "en_cours",
+    "etape": "1ère instance",
+    "domaine": "",
+    "ouverture": "",
+    "resume": "",
+    "honoraires": "forfait",
+    "taux": "",
+    "aj": "",
+    "conventionMontant": 80000,
+    "conventionDate": "",
+    "conventionNote": "",
+    "reglements": [
+     {
+      "id": "a8185e38f641",
+      "date": "2026-03-17",
+      "montant": 80000,
+      "mode": "",
+      "ref": "Acompte (reprise du tableau)"
+     }
+    ],
+    "echeances": [],
+    "journal": [
+     {
+      "id": "39a6935e5ccf",
+      "date": "2026-11-15",
+      "texte": "Reprise du tableau de suivi des règlements 2026 – Observations : Attente Appel CA pas de frais"
+     }
+    ],
+    "temps": []
+   }
+  },
+  {
+   "num": "10",
+   "client": {
+    "type": "societe",
+    "societe": "SCI FREY",
+    "civilite": "",
+    "tel": "",
+    "email": ""
+   },
+   "dossier": {
+    "intitule": "SCI FREY",
+    "statut": "en_cours",
+    "etape": "Consultation",
+    "domaine": "",
+    "ouverture": "",
+    "resume": "",
+    "honoraires": "forfait",
+    "taux": "",
+    "aj": "",
+    "conventionMontant": "",
+    "conventionDate": "",
+    "conventionNote": "",
+    "reglements": [],
+    "echeances": [],
+    "journal": [
+     {
+      "id": "a007996465e8",
+      "date": "2026-11-15",
+      "texte": "Reprise du tableau de suivi des règlements 2026 – Observations : MEE date"
+     }
+    ],
+    "temps": []
+   }
+  },
+  {
+   "num": "17",
+   "client": {
+    "type": "particulier",
+    "nom": "XAVIER PERALDI",
+    "prenom": "",
+    "civilite": "",
+    "tel": "",
+    "email": ""
+   },
+   "dossier": {
+    "intitule": "XAVIER PERALDI",
+    "statut": "en_cours",
+    "etape": "Convention",
+    "domaine": "",
+    "ouverture": "",
+    "resume": "",
+    "honoraires": "forfait",
+    "taux": "",
+    "aj": "",
+    "conventionMontant": 80000,
+    "conventionDate": "",
+    "conventionNote": "",
+    "reglements": [
+     {
+      "id": "ff86863dc706",
+      "date": "",
+      "montant": 80000,
+      "mode": "",
+      "ref": "Acompte (reprise du tableau)"
+     }
+    ],
+    "echeances": [
+     {
+      "id": "748e3e3e43a5",
+      "date": "2026-12-01",
+      "heure": "",
+      "libelle": "Convocation du 1er décembre – à reporter",
+      "fait": false
+     }
+    ],
+    "journal": [
+     {
+      "id": "706d3d4b0755",
+      "date": "2026-11-15",
+      "texte": "Reprise du tableau de suivi des règlements 2026 – Observations : CONVOQUE LE 1/12/2026 A REPORTER"
+     }
+    ],
+    "temps": []
+   }
+  },
+  {
+   "num": "26",
+   "client": {
+    "type": "particulier",
+    "nom": "DEVAUD",
+    "prenom": "Corinne",
+    "civilite": "",
+    "tel": "",
+    "email": ""
+   },
+   "dossier": {
+    "intitule": "DEVAUD Corinne",
+    "statut": "en_cours",
+    "etape": "Prise en charge par GROUPAMA",
+    "domaine": "",
+    "ouverture": "",
+    "resume": "",
+    "honoraires": "assurance",
+    "taux": "",
+    "aj": "",
+    "conventionMontant": "",
+    "conventionDate": "",
+    "conventionNote": "",
+    "reglements": [],
+    "echeances": [],
+    "journal": [
+     {
+      "id": "3bedf1427dbc",
+      "date": "2026-11-15",
+      "texte": "Reprise du tableau de suivi des règlements 2026 – Observations : En cours MEE Conclusion"
+     }
+    ],
+    "temps": []
+   }
+  },
+  {
+   "num": "37",
+   "client": {
+    "type": "particulier",
+    "nom": "CHENU",
+    "prenom": "Jean Luc",
+    "civilite": "",
+    "tel": "78 84 24",
+    "email": ""
+   },
+   "dossier": {
+    "intitule": "CHENU Jean Luc",
+    "statut": "en_cours",
+    "etape": "Divorce JAP",
+    "domaine": "Droit de la famille",
+    "ouverture": "",
+    "resume": "",
+    "honoraires": "forfait",
+    "taux": "",
+    "aj": "",
+    "conventionMontant": 100000,
+    "conventionDate": "2026-04-28",
+    "conventionNote": "",
+    "reglements": [
+     {
+      "id": "18217132f974",
+      "date": "",
+      "montant": 50000,
+      "mode": "",
+      "ref": "Acompte (reprise du tableau)"
+     }
+    ],
+    "echeances": [],
+    "journal": [
+     {
+      "id": "24132709d9ab",
+      "date": "2026-11-15",
+      "texte": "Reprise du tableau de suivi des règlements 2026"
+     }
+    ],
+    "temps": []
+   }
+  },
+  {
+   "num": "49 Bis",
+   "client": {
+    "type": "societe",
+    "societe": "SARL ETTD",
+    "civilite": "",
+    "tel": "78 84 24",
+    "email": ""
+   },
+   "dossier": {
+    "intitule": "SARL ETTD",
+    "statut": "en_cours",
+    "etape": "Liquidation",
+    "domaine": "Droit des affaires / sociétés",
+    "ouverture": "",
+    "resume": "",
+    "honoraires": "forfait",
+    "taux": "",
+    "aj": "",
+    "conventionMontant": 200000,
+    "conventionDate": "2026-05-15",
+    "conventionNote": "",
+    "reglements": [
+     {
+      "id": "f867372b563d",
+      "date": "",
+      "montant": 100000,
+      "mode": "",
+      "ref": "Acompte (reprise du tableau)"
+     }
+    ],
+    "echeances": [],
+    "journal": [
+     {
+      "id": "6a5d971ced6a",
+      "date": "2026-11-15",
+      "texte": "Reprise du tableau de suivi des règlements 2026 – Observations : en cours"
+     }
+    ],
+    "temps": []
+   }
+  },
+  {
+   "num": "51",
+   "client": {
+    "type": "particulier",
+    "nom": "CREUGNET",
+    "prenom": "Jean",
+    "civilite": "",
+    "tel": "",
+    "email": "jean.creugnet@congres.nc"
+   },
+   "dossier": {
+    "intitule": "CREUGNET Jean",
+    "statut": "en_cours",
+    "etape": "Jugé en première instance",
+    "domaine": "",
+    "ouverture": "",
+    "resume": "",
+    "honoraires": "forfait",
+    "taux": "",
+    "aj": "",
+    "conventionMontant": 300000,
+    "conventionDate": "",
+    "conventionNote": "",
+    "reglements": [
+     {
+      "id": "7de82cc838ca",
+      "date": "",
+      "montant": 150000,
+      "mode": "",
+      "ref": "Acompte (reprise du tableau)"
+     }
+    ],
+    "echeances": [],
+    "journal": [
+     {
+      "id": "4df6c70697cb",
+      "date": "2026-11-15",
+      "texte": "Reprise du tableau de suivi des règlements 2026 – Observations : JE"
+     }
+    ],
+    "temps": []
+   }
+  },
+  {
+   "num": "56",
+   "client": {
+    "type": "particulier",
+    "nom": "ORCAN DIERRICK",
+    "prenom": "",
+    "civilite": "",
+    "tel": "81 74 00",
+    "email": ""
+   },
+   "dossier": {
+    "intitule": "ORCAN DIERRICK",
+    "statut": "en_cours",
+    "etape": "",
+    "domaine": "",
+    "ouverture": "",
+    "resume": "",
+    "honoraires": "forfait",
+    "taux": "",
+    "aj": "",
+    "conventionMontant": "",
+    "conventionDate": "",
+    "conventionNote": "",
+    "reglements": [],
+    "echeances": [],
+    "journal": [
+     {
+      "id": "ba69a3fe1ad0",
+      "date": "2026-11-15",
+      "texte": "Reprise du tableau de suivi des règlements 2026"
+     }
+    ],
+    "temps": []
+   }
+  },
+  {
+   "num": "65",
+   "client": {
+    "type": "particulier",
+    "nom": "NONQUET GOPE WATTE",
+    "prenom": "",
+    "civilite": "",
+    "tel": "74 09 52",
+    "email": ""
+   },
+   "dossier": {
+    "intitule": "NONQUET GOPE WATTE",
+    "statut": "en_cours",
+    "etape": "Appel",
+    "domaine": "",
+    "ouverture": "",
+    "resume": "",
+    "honoraires": "forfait",
+    "taux": "",
+    "aj": "",
+    "conventionMontant": 100000,
+    "conventionDate": "2026-06-11",
+    "conventionNote": "",
+    "reglements": [],
+    "echeances": [],
+    "journal": [
+     {
+      "id": "4a85a6a04644",
+      "date": "2026-11-15",
+      "texte": "Reprise du tableau de suivi des règlements 2026 – Observations : ATTENTE APPEL CA"
+     }
+    ],
+    "temps": []
+   }
+  },
+  {
+   "num": "75",
+   "client": {
+    "type": "societe",
+    "societe": "SARL YAQONA",
+    "civilite": "",
+    "tel": "",
+    "email": ""
+   },
+   "dossier": {
+    "intitule": "SARL YAQONA",
+    "statut": "en_cours",
+    "etape": "",
+    "domaine": "",
+    "ouverture": "",
+    "resume": "",
+    "honoraires": "forfait",
+    "taux": "",
+    "aj": "",
+    "conventionMontant": "",
+    "conventionDate": "",
+    "conventionNote": "",
+    "reglements": [],
+    "echeances": [],
+    "journal": [
+     {
+      "id": "265e12d29e24",
+      "date": "2026-11-15",
+      "texte": "Reprise du tableau de suivi des règlements 2026"
+     }
+    ],
+    "temps": []
+   }
+  },
+  {
+   "num": "77",
+   "client": {
+    "type": "particulier",
+    "nom": "NAPOLEON",
+    "prenom": "",
+    "civilite": "",
+    "tel": "79 64 73",
+    "email": ""
+   },
+   "dossier": {
+    "intitule": "NAPOLEON",
+    "statut": "en_cours",
+    "etape": "Faire la publication du changement",
+    "domaine": "",
+    "ouverture": "",
+    "resume": "",
+    "honoraires": "forfait",
+    "taux": "",
+    "aj": "",
+    "conventionMontant": 100000,
+    "conventionDate": "2026-06-26",
+    "conventionNote": "",
+    "reglements": [
+     {
+      "id": "3e6d4c6c4be4",
+      "date": "",
+      "montant": 50000,
+      "mode": "",
+      "ref": "Acompte (reprise du tableau)"
+     }
+    ],
+    "echeances": [],
+    "journal": [
+     {
+      "id": "b7a2e43fdc55",
+      "date": "2026-11-15",
+      "texte": "Reprise du tableau de suivi des règlements 2026 – Observations : EN COURS CONVNETION"
+     }
+    ],
+    "temps": []
+   }
+  }
+ ]
+}

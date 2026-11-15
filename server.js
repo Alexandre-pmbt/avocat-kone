@@ -124,9 +124,13 @@ function allData() {
 }
 app.get("/api/data", auth, (req, res) => res.json(allData()));
 
-// Numéro suivant pour devis / factures / dossiers : PREFIXE-AAAA-NNN, sans trou, attribué côté serveur.
-const PREFIX = { devis: "DEV", factures: "FAC", dossiers: "DOS" };
+// Numéro suivant. Devis / factures : PREFIXE-AAAA-NNN, sans trou. Dossiers : numérotation du cabinet (1, 2, … 49 Bis, …) → plus grand numéro + 1.
+const PREFIX = { devis: "DEV", factures: "FAC" };
 function nextNum(col) {
+  if (col === "dossiers") {
+    const max = db.prepare("SELECT num FROM docs WHERE collection = 'dossiers'").all().reduce((a, r) => { const n = /^\d+/.test(r.num || "") ? parseInt(r.num, 10) : 0; return Math.max(a, n); }, 0);
+    return String(max + 1);
+  }
   const st = db.prepare("SELECT data FROM settings WHERE id = 1").get(), s = st ? JSON.parse(st.data) : {};
   const year = new Date(Date.now() + 11 * 3600000).getUTCFullYear();
   const pre = ((s.prefixes || {})[col] || PREFIX[col]) + "-" + year + "-";
@@ -134,6 +138,7 @@ function nextNum(col) {
     .reduce((a, r) => Math.max(a, parseInt(r.num.slice(pre.length), 10) || 0), 0);
   return pre + String(max + 1).padStart(3, "0");
 }
+const numTaken = (col, num, id) => !!db.prepare("SELECT 1 FROM docs WHERE collection = ? AND num = ? AND id != ?").get(col, num, id);
 
 app.put("/api/docs/:col/:id", auth, (req, res) => {
   const { col, id } = req.params;
@@ -141,6 +146,9 @@ app.put("/api/docs/:col/:id", auth, (req, res) => {
   const body = req.body || {};
   delete body.id;
   const existing = db.prepare("SELECT num, data, created_by FROM docs WHERE collection = ? AND id = ?").get(col, id);
+  // Dossiers : le numéro peut être saisi ou corrigé (ex. « 49 Bis »), à condition d'être libre.
+  const wanted = col === "dossiers" ? String(body.num || "").trim() : "";
+  if (wanted && numTaken(col, wanted, id)) return res.status(409).json({ error: "numero_deja_utilise" });
   const tx = db.transaction(() => {
     if (existing) {
       const prev = JSON.parse(existing.data);
@@ -153,6 +161,7 @@ app.put("/api/docs/:col/:id", auth, (req, res) => {
       body.num = null;
       if (col === "devis" || col === "dossiers" || (col === "factures" && body.statut === "emise")) body.num = nextNum(col);
     }
+    if (wanted) body.num = wanted;
     body.updatedAt = now(); body.updatedBy = req.user.id;
     db.prepare(`INSERT INTO docs (collection, id, num, data, created_by, updated_by, updated_at) VALUES (?,?,?,?,?,?,?)
       ON CONFLICT(collection, id) DO UPDATE SET num = excluded.num, data = excluded.data, updated_by = excluded.updated_by, updated_at = excluded.updated_at`)
@@ -265,6 +274,34 @@ app.use(express.static(path.join(__dirname, "public"), { index: "index.html", se
     db.prepare("INSERT INTO settings (id, data) VALUES (1, ?)").run(JSON.stringify(p));
     console.log("Paramètres du cabinet initialisés : " + (p.cabinet || ""));
   } catch (e) { console.warn("parametres-initiaux.json illisible"); }
+})();
+
+// ---------------------------------------------------------------- Reprise de dossiers existants
+// ajouts-dossiers.json : clients et dossiers repris d'un tableau, insérés une seule fois (lot identifié par « lot »).
+// Un dossier dont le numéro existe déjà n'est pas remplacé ; un client de même nom est réutilisé.
+(function ajoutsDossiers() {
+  const f = path.join(__dirname, "ajouts-dossiers.json"); if (!fs.existsSync(f)) return;
+  let d; try { d = JSON.parse(fs.readFileSync(f, "utf8")); } catch (e) { console.warn("ajouts-dossiers.json illisible"); return; }
+  const lot = "ajouts-dossiers:" + (d.lot || "1");
+  if (db.prepare("SELECT 1 FROM journal WHERE action = 'reprise' AND detail = ?").get(lot)) return;
+  const admin = db.prepare("SELECT id FROM users WHERE role = 'admin' ORDER BY created_at LIMIT 1").get(), by = admin ? admin.id : null;
+  const norm = v => String(v || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+  const ins = (col, id, num, body) => db.prepare("INSERT INTO docs (collection, id, num, data, created_by, updated_by, updated_at) VALUES (?,?,?,?,?,?,?)").run(col, id, num, JSON.stringify(Object.assign(body, { createdBy: by, createdAt: now(), updatedAt: now() })), by, by, now());
+  let n = 0;
+  db.transaction(() => {
+    const clients = db.prepare("SELECT id, data FROM docs WHERE collection = 'clients'").all().map(r => Object.assign(JSON.parse(r.data), { id: r.id }));
+    const key = c => norm(c.type === "societe" ? c.societe : (c.nom || "") + " " + (c.prenom || ""));
+    (d.dossiers || []).forEach(x => {
+      if (db.prepare("SELECT 1 FROM docs WHERE collection = 'dossiers' AND num = ?").get(String(x.num))) return;
+      let c = clients.find(k => key(k) === key(x.client));
+      if (!c) { c = Object.assign({ id: newId(), adresse: "", notes: "" }, x.client); const b = Object.assign({}, c); delete b.id; ins("clients", c.id, null, b); clients.push(c); }
+      const body = Object.assign({}, x.dossier, { clientId: c.id });
+      ins("dossiers", newId(), String(x.num), Object.assign(body, { num: String(x.num) }));
+      n++;
+    });
+    db.prepare("INSERT INTO journal VALUES (?,?,?,?)").run(now(), by, "reprise", lot);
+  })();
+  console.log("Reprise de dossiers : " + n + " dossier(s) ajouté(s)");
 })();
 
 // ---------------------------------------------------------------- Sauvegarde quotidienne (30 jours)
