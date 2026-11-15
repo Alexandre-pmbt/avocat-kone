@@ -241,7 +241,15 @@ app.post("/api/import", auth, adminOnly, (req, res) => {
 
 // ---------------------------------------------------------------- Fichiers statiques
 app.get("/vendor/jspdf.js", (req, res) => res.sendFile(path.join(__dirname, "node_modules", "jspdf", "dist", "jspdf.umd.min.js"), { maxAge: "7d" }));
-app.use(express.static(path.join(__dirname, "public"), { index: "index.html", setHeaders(res) { res.setHeader("Cache-Control", "no-cache"); } }));
+// Version du logiciel : change à chaque mise en ligne. Elle est ajoutée à l'adresse du script (le navigateur
+// ne peut pas garder l'ancien) et consultée régulièrement par les pages ouvertes pour proposer de recharger.
+const VERSION = String(process.env.RAILWAY_GIT_COMMIT_SHA || Date.now()).slice(0, 12);
+const INDEX = fs.readFileSync(path.join(__dirname, "public", "index.html"), "utf8")
+  .replace('src="/app.js"', `src="/app.js?v=${VERSION}"`).replace("<head>", `<head>\n<meta name="app-version" content="${VERSION}">`);
+const sendIndex = (req, res) => { res.setHeader("Cache-Control", "no-store"); res.type("html").send(INDEX); };
+app.get("/api/version", (req, res) => { res.setHeader("Cache-Control", "no-store"); res.json({ version: VERSION }); });
+app.get(["/", "/index.html"], sendIndex);
+app.use(express.static(path.join(__dirname, "public"), { index: false, setHeaders(res) { res.setHeader("Cache-Control", "no-cache"); } }));
 
 // ---------------------------------------------------------------- Premier administrateur sans terminal
 // ADMIN_EMAIL + ADMIN_PASSWORD (+ ADMIN_NAME) créent le premier compte au démarrage.

@@ -41,7 +41,7 @@ async function remove(col, id) {
   D[col] = D[col].filter(x => x.id !== id);
 }
 function toast(msg) {
-  document.querySelectorAll(".toast").forEach(x => x.remove());
+  document.querySelectorAll(".toast:not(#maj)").forEach(x => x.remove());
   const t = document.createElement("div"); t.className = "toast"; t.textContent = msg; document.body.appendChild(t);
   setTimeout(() => t.remove(), 2600);
 }
@@ -825,3 +825,21 @@ async function boot() {
   render();
 }
 boot();
+
+// Mise à jour : si une nouvelle version est mise en ligne pendant que la page est ouverte, on propose de recharger.
+(function watchVersion() {
+  const mine = (document.querySelector('meta[name="app-version"]') || {}).content;
+  if (!mine) return;
+  const check = async () => {
+    try {
+      const v = (await (await fetch("/api/version", { cache: "no-store" })).json()).version;
+      if (v && v !== mine && !document.getElementById("maj")) {
+        const b = document.createElement("div"); b.id = "maj"; b.className = "toast"; b.style.cursor = "pointer";
+        b.innerHTML = "Une nouvelle version du logiciel est disponible – <u>cliquer pour l'afficher</u>";
+        b.onclick = () => location.reload(); document.body.appendChild(b);
+      }
+    } catch (e) { /* hors ligne : on réessaiera */ }
+  };
+  setInterval(check, 60000);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) check(); });
+})();
