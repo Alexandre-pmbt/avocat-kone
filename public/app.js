@@ -45,7 +45,7 @@ function toast(msg) {
   const t = document.createElement("div"); t.className = "toast"; t.textContent = msg; document.body.appendChild(t);
   setTimeout(() => t.remove(), 2600);
 }
-const ERR = { facture_emise: "Une facture émise ne peut pas être supprimée : établissez un avoir.", reserve_admin: "Réservé à l'avocat (administrateur).", email_deja_utilise: "Cette adresse e-mail est déjà utilisée.", champs_invalides: "Vérifiez le nom, l'e-mail et le mot de passe (8 caractères minimum).", mot_de_passe_trop_court: "Mot de passe trop court (8 caractères minimum).", mot_de_passe_actuel_incorrect: "Mot de passe actuel incorrect.", format_inconnu: "Ce fichier n'est pas une sauvegarde du logiciel.", numero_deja_utilise: "Ce numéro de dossier est déjà utilisé." };
+const ERR = { facture_emise: "Une facture émise ne peut pas être supprimée : établissez un avoir.", reserve_admin: "Réservé à l'avocat (administrateur).", email_deja_utilise: "Cette adresse e-mail est déjà utilisée.", champs_invalides: "Vérifiez le nom, l'e-mail et le mot de passe (8 caractères minimum).", mot_de_passe_trop_court: "Mot de passe trop court (8 caractères minimum).", mot_de_passe_actuel_incorrect: "Mot de passe actuel incorrect.", format_inconnu: "Ce fichier n'est pas une sauvegarde du logiciel.", numero_deja_utilise: "Ce numéro de dossier est déjà utilisé.", archive_facture: "La copie archivée d'une facture émise est conservée et ne peut pas être supprimée.", format_non_supporte: "Format non pris en charge (PDF, Word, PNG ou JPEG)." };
 const fail = e => { if (e.message !== "non_connecte") alert(ERR[e.message] || "Erreur : " + e.message); };
 
 // ============================================================ Référentiels
@@ -116,7 +116,7 @@ function renderLogin() {
 // ============================================================ Cadre et navigation
 const NAV = [
   ["tableau", "Tableau de bord"], ["demandes", "Demandes clients"], ["dossiers", "Dossiers"], ["clients", "Clients"],
-  ["devis", "Devis"], ["factures", "Factures"], ["parametres", "Paramètres"], ["equipe", "Équipe"]
+  ["devis", "Devis"], ["factures", "Factures"], ["documents", "Documents"], ["parametres", "Paramètres"], ["equipe", "Équipe"]
 ];
 function route() { const h = location.hash.replace(/^#\/?/, "").split("/"); return { page: h[0] || "tableau", id: h[1] || null }; }
 function go(h) { location.hash = "#/" + h; }
@@ -138,7 +138,7 @@ function render() {
   </div>`;
   $("#lo").onclick = async () => { await api("POST", "/api/logout"); ME = null; render(); };
   $("#pw").onclick = changePassword;
-  const V = { tableau: vDashboard, demandes: vDemandes, dossiers: vDossiers, dossier: vDossier, clients: vClients, devis: r.id ? vDevisEdit : vDevis, factures: vFactures, facture: vFactureEdit, parametres: vParametres, equipe: vEquipe };
+  const V = { tableau: vDashboard, demandes: vDemandes, dossiers: vDossiers, dossier: vDossier, clients: vClients, devis: r.id ? vDevisEdit : vDevis, factures: vFactures, facture: vFactureEdit, documents: vDocuments, parametres: vParametres, equipe: vEquipe };
   (V[r.page] || vDashboard)($("#main"), r.id);
   window.scrollTo(0, 0);
 }
@@ -432,9 +432,13 @@ function vDossier(el, id) {
       ${hNon ? `<button class="btn sm" id="ft">Facturer ${String(hNon).replace(".", ",")} h</button>` : ""}<button class="btn sm" id="at">+ Saisir</button></div>
       ${temps.length ? `<table>${temps.map(t => `<tr><td style="white-space:nowrap">${fdate(t.date)}</td><td>${esc(t.desc)}</td><td class="num">${String(num(t.heures)).replace(".", ",")} h</td><td>${t.factureId ? '<span class="tag ok">Facturé</span>' : `<button class="btn sm ghost" data-deltps="${t.id}">×</button>`}</td></tr>`).join("")}
         <tr><td></td><td class="muted">Total</td><td class="num"><b>${String(hTot).replace(".", ",")} h</b></td><td></td></tr></table>` : `<div class="empty">Aucun temps saisi</div>`}</div>
-    <div class="card"><h2>Devis</h2>${devis.length ? `<table>${devis.map(x => `<tr class="click" onclick="go('devis/${x.id}')"><td>${esc(x.num)}</td><td>${fdate(x.date)}</td><td class="num">${money(totals(x).ttc)}</td><td>${tag(ST_DEV, x.statut)}</td></tr>`).join("")}</table>` : `<div class="empty">Aucun devis</div>`}</div>
-    <div class="card"><h2>Factures</h2>${facts.length ? `<table>${facts.map(f => { const st = factState(f); return `<tr class="click" onclick="go('facture/${f.id}')"><td>${esc(f.num || "Brouillon")}</td><td>${fdate(f.date)}</td><td class="num">${money(totals(f).ttc)}</td><td><span class="tag ${st[1]}">${st[0]}</span></td></tr>`; }).join("")}</table>` : `<div class="empty">Aucune facture</div>`}</div>
+    <div class="card"><div class="head" style="margin-bottom:8px"><h2 style="margin:0">Documents du dossier</h2><div class="sp"></div><button class="btn sm" id="adddoc">+ Déposer un document</button></div>
+      ${docsOf(id).length ? `<table>${docsOf(id).map(x => docRow(x)).join("")}</table>` : `<div class="empty">Aucun document – les conventions générées et les factures émises s'y classent automatiquement</div>`}</div>
+    <div class="card"><h2>Devis</h2>${devis.length ? `<table>${devis.map(x => `<tr class="click" onclick="go('devis/${x.id}')"><td>${esc(x.num)}</td><td>${fdate(x.date)}</td><td class="num">${money(totals(x).ttc)}</td><td>${tag(ST_DEV, x.statut)}</td><td class="num"><button class="btn sm" onclick="event.stopPropagation();voirDevis('${x.id}')">Voir</button></td></tr>`).join("")}</table>` : `<div class="empty">Aucun devis</div>`}</div>
+    <div class="card"><h2>Factures</h2>${facts.length ? `<table>${facts.map(f => { const st = factState(f); return `<tr class="click" onclick="go('facture/${f.id}')"><td>${esc(f.num || "Brouillon")}</td><td>${fdate(f.date)}</td><td class="num">${money(totals(f).ttc)}</td><td><span class="tag ${st[1]}">${st[0]}</span></td><td class="num"><button class="btn sm" onclick="event.stopPropagation();voirFacture('${f.id}')">Voir</button></td></tr>`; }).join("")}</table>` : `<div class="empty">Aucune facture</div>`}</div>
   </div>`;
+  bindDocRows(el);
+  $("#adddoc").onclick = () => deposerDocument(id);
   const upd = async (fn, msg) => { const o = JSON.parse(JSON.stringify(dossier(id))); fn(o); try { await save("dossiers", o); if (msg) toast(msg); render(); } catch (e) { fail(e); } };
   $("#ed").onclick = () => editDossier(id);
   $("#cv").onclick = () => conventionDialog(id);
@@ -552,7 +556,7 @@ function vDevisEdit(el, rawId) {
   const dosOpts = `<option value="">— Aucun —</option>` + D.dossiers.filter(d => !doc.clientId || d.clientId === doc.clientId).map(d => `<option value="${d.id}" ${d.id === doc.dossierId ? "selected" : ""}>${esc(dosLabel(d))}</option>`).join("");
   el.innerHTML = `
   <div class="head"><div><div class="small muted"><a href="#/devis">Devis</a> › ${esc(doc.num || "Nouveau")}</div><h1>${doc.num ? "Devis " + esc(doc.num) : "Nouveau devis"}</h1></div><div class="sp"></div>
-    ${doc._new ? "" : `<button class="btn" id="pdf">PDF</button>${doc.factureId ? `<button class="btn" onclick="go('facture/${doc.factureId}')">Voir la facture</button>` : `<button class="btn" id="tof">Transformer en facture</button>`}`}
+    ${doc._new ? "" : `<button class="btn" id="pdf">Voir le devis</button>${doc.factureId ? `<button class="btn" onclick="go('facture/${doc.factureId}')">Voir la facture</button>` : `<button class="btn" id="tof">Transformer en facture</button>`}`}
     <button class="btn pri" id="sv">Enregistrer</button></div>
   <div class="card">
     <div class="form">
@@ -574,7 +578,7 @@ function vDevisEdit(el, rawId) {
   bindLines(el, doc, locked, rer);
   const doSave = async () => { $$(".form [name]", el).forEach(i => doc[i.name] = i.value); if (!doc.clientId) { alert("Choisissez un client."); return null; } const o = Object.assign({}, doc); delete o._new; delete o._key; try { const s = await save("devis", o); curDoc = Object.assign(JSON.parse(JSON.stringify(s)), { _key: "devis:" + s.id }); return s; } catch (e) { fail(e); return null; } };
   $("#sv").onclick = async () => { const s = await doSave(); if (s) { toast("Devis " + s.num + " enregistré"); if (rawId.startsWith("new")) go("devis/" + s.id); else rer(); } };
-  if ($("#pdf")) $("#pdf").onclick = async () => { const s = await doSave(); if (s) pdfDoc(s, "devis"); };
+  if ($("#pdf")) $("#pdf").onclick = async () => { const s = await doSave(); if (s) openViewer(Object.assign(pdfDoc(s, "devis"), { title: "Devis " + s.num })); };
   if ($("#tof")) $("#tof").onclick = async () => {
     const s = await doSave(); if (!s) return;
     const f = { id: uid(), statut: "brouillon", date: today(), echeance: addDays(today(), +S().delai || 30), clientId: s.clientId, dossierId: s.dossierId, objet: s.objet, tgc: s.tgc, lignes: JSON.parse(JSON.stringify(s.lignes)), paiements: [], devisId: s.id, devisNum: s.num };
@@ -598,7 +602,7 @@ function vFactureEdit(el, rawId) {
   el.innerHTML = `
   <div class="head"><div><div class="small muted"><a href="#/factures">Factures</a> › ${esc(doc.num || "Brouillon")}</div><h1>${doc.avoir ? "Avoir" : "Facture"} ${esc(doc.num || "(brouillon)")}</h1></div><div class="sp"></div>
     <span class="tag ${st[1]}">${st[0]}</span>
-    ${doc._new ? "" : `<button class="btn" id="pdf">${locked ? "PDF" : "Aperçu PDF"}</button>`}
+    ${doc._new ? "" : `<button class="btn" id="pdf">${locked ? "Voir la facture" : "Aperçu"}</button>`}${D.documents.some(x => x.refId === doc.id) ? `<button class="btn" id="arch">Copie archivée</button>` : ""}
     ${locked ? (doc.avoir ? "" : `<button class="btn" id="av">Établir un avoir</button>`) : `<button class="btn" id="sv">Enregistrer le brouillon</button><button class="btn pri" id="em">Émettre la facture</button>`}</div>
   ${locked ? `<div class="small muted" style="margin:-10px 0 14px">Facture émise : son contenu et son numéro ne peuvent plus être modifiés. Pour la corriger, établissez un avoir.</div>` : ""}
   ${doc.devisNum ? `<div class="small muted" style="margin:-10px 0 14px">Établie depuis le devis ${esc(doc.devisNum)}</div>` : ""}
@@ -635,9 +639,14 @@ function vFactureEdit(el, rawId) {
     $$(".form [name]", el).forEach(i => doc[i.name] = i.value);
     if (!doc.lignes.length || !totals(doc).ttc) return alert("La facture est vide.");
     if (!confirm("Émettre la facture ? Elle recevra son numéro définitif et ne pourra plus être modifiée.")) return;
-    const s = await persist({ statut: "emise" }); if (s) { toast("Facture " + s.num + " émise"); if (rawId.startsWith("new")) go("facture/" + s.id); else rer(); }
+    const s = await persist({ statut: "emise" });
+    if (s) {
+      try { await archiveFile(pdfDoc(s, "facture"), { type: s.avoir ? "avoir" : "facture", titre: (s.avoir ? "Avoir " : "Facture ") + s.num + " – copie archivée à l'émission", refId: s.id, dossierId: s.dossierId, clientId: s.clientId, date: s.date }); } catch (e) { console.error(e); }
+      toast("Facture " + s.num + " émise et archivée"); if (rawId.startsWith("new")) go("facture/" + s.id); else rer();
+    }
   };
-  if ($("#pdf")) $("#pdf").onclick = async () => { const s = locked ? doc : await persist(); if (s) pdfDoc(s, "facture"); };
+  if ($("#pdf")) $("#pdf").onclick = async () => { const s = locked ? doc : await persist(); if (s) openViewer(Object.assign(pdfDoc(s, "facture"), { title: (s.avoir ? "Avoir " : "Facture ") + (s.num || "(brouillon)") })); };
+  if ($("#arch")) $("#arch").onclick = () => viewDocument(D.documents.find(x => x.refId === doc.id));
   if ($("#del")) $("#del").onclick = async () => {
     if (!confirm("Supprimer ce brouillon ?")) return;
     try {
@@ -828,7 +837,7 @@ function pdfDoc(doc, kind) {
     txt(foot, M, 290 - foot.length * 2.8);
     if (n > 1) txt(i + " / " + n, R, 293, { align: "right" });
   }
-  pdf.save((isFact ? (doc.avoir ? "Avoir" : "Facture") : "Devis") + "-" + (doc.num || "brouillon") + "-" + clientName(c).replace(/[^\w\- ]+/g, "").trim().replace(/\s+/g, "-") + ".pdf");
+  return { blob: pdf.output("blob"), mime: "application/pdf", name: (isFact ? (doc.avoir ? "Avoir" : "Facture") : "Devis") + "-" + (doc.num || "brouillon") + "-" + clientName(c).replace(/[^\w\- ]+/g, "").trim().replace(/\s+/g, "-") + ".pdf" };
 }
 
 // ============================================================ Convention d'honoraires (Word), générée depuis le dossier
@@ -877,7 +886,9 @@ function conventionDialog(dosId) {
     $("#c", m).onclick = close;
     $("#o", m).onclick = async () => {
       const f = readForm(m);
-      try { await conventionDocx(d, c, f); } catch (e) { console.error(e); return alert("Impossible de générer la convention : " + e.message); }
+      let file, saved;
+      try { file = await conventionDocx(d, c, f); saved = await archiveFile(file, { type: "convention", titre: f.titre + (f.mode ? " – " + (HON[f.mode] || f.mode) : ""), dossierId: d.id, clientId: d.clientId, date: today() }); }
+      catch (e) { console.error(e); return alert("Impossible de générer la convention : " + e.message); }
       if (f.maj) {
         const o = JSON.parse(JSON.stringify(d)); o.honoraires = f.mode;
         if (["forfait", "resultat"].includes(f.mode) && num(f.montant)) o.conventionMontant = num(f.montant);
@@ -885,7 +896,7 @@ function conventionDialog(dosId) {
         (o.journal = o.journal || []).push({ id: uid(), date: today(), texte: "Convention d'honoraires générée (" + (HON[f.mode] || f.mode) + (num(f.montant) && f.mode !== "horaire" ? ", " + money(num(f.montant)) + " " + f.base : "") + ").", by: ME.id });
         try { await save("dossiers", o); } catch (e) { fail(e); }
       }
-      close(); toast("Convention générée"); render();
+      close(); render(); toast("Convention générée et classée dans le dossier"); viewDocument(saved);
     };
   });
 }
@@ -997,9 +1008,107 @@ async function conventionDocx(d, c, f) {
   const docx = new Document({ creator: s.cabinet, title: f.titre, styles: { default: { document: { run: { font: FONT, size: 22 } } } },
     sections: [{ properties: { page: { margin: { top: 1134, right: 1417, bottom: 1134, left: 1417 } } }, footers: { default: footer }, children }] });
   const blob = await Packer.toBlob(docx);
-  const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
-  a.download = `Convention-${d.num}-${cname.replace(/[^\w\- ]+/g, "").trim().replace(/\s+/g, "-")}.docx`;
-  document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  return { blob, mime: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", name: `Convention-${d.num}-${cname.replace(/[^\w\- ]+/g, "").trim().replace(/\s+/g, "-")}.docx` };
+}
+
+// ============================================================ Documents : archivage et visionneuse intégrée
+const DOC_TYPES = { convention: ["Convention", "acc"], convention_signee: ["Convention signée", "ok"], facture: ["Facture (archive)", "info"], avoir: ["Avoir (archive)", "info"], piece: ["Pièce", ""], courrier: ["Courrier", ""], autre: ["Autre", ""] };
+const MIME_LABEL = m => /pdf/.test(m) ? "PDF" : /word/.test(m) ? "Word" : /image/.test(m) ? "Image" : "";
+async function uploadFile(file) {
+  const r = await fetch("/api/files", { method: "POST", headers: { "Content-Type": file.mime || file.blob.type, "X-Filename": encodeURIComponent(file.name) }, body: file.blob, credentials: "same-origin" });
+  const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(j.error || "envoi_impossible"); return j;
+}
+async function archiveFile(file, meta) {
+  const up = await uploadFile(file);
+  return save("documents", Object.assign({ id: uid(), fileId: up.id, fichier: up.name, mime: up.mime, taille: up.size }, meta));
+}
+const docsOf = dosId => D.documents.filter(x => x.dossierId === dosId).sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")) || String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+const docRow = x => `<tr><td style="white-space:nowrap">${fdate(x.date)}</td><td>${tag(DOC_TYPES, x.type)}</td><td>${esc(x.titre || x.fichier)}<div class="small muted">${esc(MIME_LABEL(x.mime))}${x.taille ? " · " + Math.max(1, Math.round(x.taille / 1024)) + " Ko" : ""}</div></td>
+  <td class="num" style="white-space:nowrap"><button class="btn sm" data-voirdoc="${x.id}">Voir</button>${["facture", "avoir"].includes(x.type) ? "" : ` <button class="btn sm ghost" data-deldoc="${x.id}" title="Supprimer">×</button>`}</td></tr>`;
+function bindDocRows(root) {
+  $$("[data-voirdoc]", root).forEach(b => b.onclick = e => { e.stopPropagation(); viewDocument(D.documents.find(x => x.id === b.dataset.voirdoc)); });
+  $$("[data-deldoc]", root).forEach(b => b.onclick = async e => { e.stopPropagation(); if (!confirm("Supprimer définitivement ce document ?")) return; try { await remove("documents", b.dataset.deldoc); render(); } catch (err) { fail(err); } });
+}
+function voirFacture(id) { const f = D.factures.find(x => x.id === id); if (f) openViewer(Object.assign(pdfDoc(f, "facture"), { title: (f.avoir ? "Avoir " : "Facture ") + (f.num || "(brouillon)") })); }
+function voirDevis(id) { const d = D.devis.find(x => x.id === id); if (d) openViewer(Object.assign(pdfDoc(d, "devis"), { title: "Devis " + d.num })); }
+async function viewDocument(x) {
+  if (!x) return;
+  try { const r = await fetch("/files/" + x.fileId, { credentials: "same-origin" }); if (!r.ok) throw new Error("fichier introuvable"); openViewer({ blob: await r.blob(), mime: x.mime, name: x.fichier, title: x.titre || x.fichier }); }
+  catch (e) { alert("Impossible d'ouvrir le document : " + e.message); }
+}
+// Le module d'affichage Word porte le même nom global que le module de génération : on le charge à la demande en préservant ce dernier.
+let previewLib = null;
+function loadPreview() {
+  if (previewLib) return previewLib;
+  const add = src => new Promise((ok, ko) => { const t = document.createElement("script"); t.src = src; t.onload = ok; t.onerror = () => ko(new Error("chargement impossible")); document.head.appendChild(t); });
+  previewLib = (async () => { const gen = window.docx; if (!window.JSZip) await add("/vendor/jszip.js"); await add("/vendor/docx-preview.js"); const lib = window.docx; window.docx = gen; return lib; })();
+  return previewLib;
+}
+function openViewer(file) {
+  const url = URL.createObjectURL(file.blob), isPdf = /pdf/.test(file.mime), isWord = /word/.test(file.mime), isImg = /image/.test(file.mime);
+  const close = modal(`<div style="display:flex;align-items:center;gap:8px;margin:-6px 0 12px;flex-wrap:wrap"><h2 style="margin:0;flex:1;font-size:19px">${esc(file.title || file.name)}</h2>
+      ${isPdf ? `<button class="btn" id="vprint">Imprimer</button>` : ""}<a class="btn" id="vdl" href="${url}" download="${esc(file.name)}">Télécharger</a><button class="btn pri" id="vclose">Fermer</button></div>
+    <div id="vbody" style="height:78vh;border:1px solid var(--line);border-radius:6px;overflow:auto;background:#eceae5">
+      ${isPdf ? `<iframe src="${url}" style="width:100%;height:100%;border:0;background:#fff" title="Document"></iframe>` : isImg ? `<div style="padding:12px;text-align:center"><img src="${url}" style="max-width:100%"></div>` : isWord ? `<div class="empty">Ouverture du document…</div>` : `<div class="empty">Aperçu indisponible pour ce format : utilisez « Télécharger ».</div>`}
+    </div>`, (m, cl) => {
+    m.parentNode.querySelector(".modal").style.maxWidth = "1040px";
+    $("#vclose", m).onclick = cl;
+    if ($("#vprint", m)) $("#vprint", m).onclick = () => { try { $("iframe", m).contentWindow.print(); } catch (e) { window.open(url); } };
+    if (isWord) loadPreview().then(lib => { const box = $("#vbody", m); box.innerHTML = ""; return lib.renderAsync(file.blob, box, null, { inWrapper: true, ignoreLastRenderedPageBreak: true }); })
+      .catch(e => { $("#vbody", m).innerHTML = `<div class="empty">Aperçu impossible (${esc(e.message)}) : utilisez « Télécharger ».</div>`; });
+  });
+  return close;
+}
+function deposerDocument(dosId) {
+  const d = dossier(dosId);
+  modal(`<h2>Déposer un document – dossier ${esc(d.num)}</h2><div class="form">
+      <div class="f s6"><label>Fichier (PDF, Word, photo – 25 Mo maximum)</label><input type="file" name="fichier" accept=".pdf,.docx,image/png,image/jpeg,image/webp"></div>
+      <div class="f"><label>Type</label><select name="type">${Object.entries(DOC_TYPES).filter(([k]) => !["facture", "avoir"].includes(k)).map(([k, v]) => `<option value="${k}" ${k === "convention_signee" && !(d.conventionDate) ? "selected" : ""}>${v[0]}</option>`).join("")}</select></div>
+      <div class="f"><label>Date du document</label><input type="date" name="date" value="${today()}"></div>
+      <div class="f"><label>&nbsp;</label><span class="small muted" id="hint"></span></div>
+      <div class="f s6"><label>Intitulé</label><input name="titre" placeholder="Ex. : Convention signée, jugement du TPI, courrier adverse…"></div></div>
+      <div class="actions"><div class="sp"></div><button class="btn ghost" id="c">Annuler</button><button class="btn pri" id="o">Déposer</button></div>`, (m, close) => {
+    const sync = () => { $("#hint", m).textContent = $("[name=type]", m).value === "convention_signee" ? "La date de signature sera reportée dans le dossier." : ""; };
+    $("[name=type]", m).onchange = sync; sync();
+    $("#c", m).onclick = close;
+    $("#o", m).onclick = async () => {
+      const inp = $("[name=fichier]", m), file = inp.files[0], f = readForm(m);
+      if (!file) return alert("Choisissez un fichier.");
+      if (file.size > 25e6) return alert("Fichier trop lourd (25 Mo maximum).");
+      const mime = file.type || (/\.docx$/i.test(file.name) ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document" : /\.pdf$/i.test(file.name) ? "application/pdf" : "");
+      $("#o", m).disabled = true; $("#o", m).textContent = "Envoi…";
+      try {
+        await archiveFile({ blob: file, mime, name: file.name }, { type: f.type, titre: f.titre || (DOC_TYPES[f.type] || ["Document"])[0], dossierId: dosId, clientId: d.clientId, date: f.date });
+        if (f.type === "convention_signee") { const o = JSON.parse(JSON.stringify(dossier(dosId))); o.conventionDate = f.date; (o.journal = o.journal || []).push({ id: uid(), date: today(), texte: "Convention signée déposée (signée le " + fdate(f.date) + ").", by: ME.id }); await save("dossiers", o); }
+        close(); toast("Document déposé"); render();
+      } catch (e) { $("#o", m).disabled = false; $("#o", m).textContent = "Déposer"; fail(e); }
+    };
+  });
+}
+
+let docFilter = "tous", docQ = "";
+function vDocuments(el) {
+  // Liste unique : devis et factures (toujours visibles à jour) + documents archivés ou déposés.
+  const items = [].concat(
+    D.factures.map(f => ({ kind: "facture", id: f.id, date: f.date, type: f.avoir ? "avoir_live" : "facture_live", titre: (f.avoir ? "Avoir " : "Facture ") + (f.num || "(brouillon)"), clientId: f.clientId, dossierId: f.dossierId, extra: money(totals(f).ttc) + " · " + factState(f)[0] })),
+    D.devis.map(x => ({ kind: "devis", id: x.id, date: x.date, type: "devis", titre: "Devis " + x.num, clientId: x.clientId, dossierId: x.dossierId, extra: money(totals(x).ttc) + " · " + (ST_DEV[x.statut] || [""])[0] })),
+    D.documents.filter(x => !["facture", "avoir"].includes(x.type)).map(x => ({ kind: "doc", id: x.id, date: x.date, type: x.type, titre: x.titre || x.fichier, clientId: x.clientId, dossierId: x.dossierId, extra: MIME_LABEL(x.mime) })));
+  const F = { tous: ["Tous", () => true], conventions: ["Conventions", i => /^convention/.test(i.type)], factures: ["Factures", i => i.kind === "facture"], devis: ["Devis", i => i.kind === "devis"], pieces: ["Pièces et courriers", i => ["piece", "courrier", "autre"].includes(i.type)] };
+  const LBL = Object.assign({ facture_live: ["Facture", "info"], avoir_live: ["Avoir", "info"], devis: ["Devis", ""] }, DOC_TYPES);
+  const q = norm(docQ);
+  const list = items.filter(F[docFilter][1]).filter(i => !q || norm([i.titre, clientName(client(i.clientId)), dossier(i.dossierId) ? dossier(i.dossierId).num + " " + dossier(i.dossierId).intitule : ""].join(" ")).includes(q))
+    .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
+  el.innerHTML = `
+  <div class="head"><h1>Documents</h1></div>
+  <div class="filters"><div class="chips">${Object.entries(F).map(([k, v]) => `<button class="chip ${k === docFilter ? "on" : ""}" data-f="${k}">${v[0]} (${items.filter(v[1]).length})</button>`).join("")}</div>
+    <input id="dcq" placeholder="Client, dossier, n°…" value="${esc(docQ)}"></div>
+  <div class="card" style="padding:6px 8px">${list.length ? `<table><tr><th>Date</th><th>Type</th><th>Document</th><th>Client</th><th>Dossier</th><th></th></tr>
+    ${list.map(i => `<tr><td style="white-space:nowrap">${fdate(i.date)}</td><td>${tag(LBL, i.type)}</td><td>${esc(i.titre)}<div class="small muted">${esc(i.extra || "")}</div></td>
+      <td>${esc(clientName(client(i.clientId)))}</td><td>${dossier(i.dossierId) ? `<a href="#/dossier/${i.dossierId}">${esc(dossier(i.dossierId).num)}</a>` : "—"}</td>
+      <td class="num"><button class="btn sm pri" data-v="${i.kind}:${i.id}">Voir</button></td></tr>`).join("")}</table>` : `<div class="empty">Aucun document</div>`}</div>`;
+  $$(".chip", el).forEach(b => b.onclick = () => { docFilter = b.dataset.f; vDocuments(el); });
+  const inp = $("#dcq", el); inp.oninput = () => { docQ = inp.value; vDocuments(el); const n = $("#dcq", el); n.focus(); n.setSelectionRange(n.value.length, n.value.length); };
+  $$("[data-v]", el).forEach(b => b.onclick = () => { const [k, id] = b.dataset.v.split(":"); if (k === "facture") voirFacture(id); else if (k === "devis") voirDevis(id); else viewDocument(D.documents.find(x => x.id === id)); });
 }
 
 // ============================================================ Paramètres

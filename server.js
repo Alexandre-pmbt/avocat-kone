@@ -15,9 +15,10 @@ const PORT = +process.env.PORT || 3000;
 const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(__dirname, "data"));
 const COOKIE_SECURE = process.env.COOKIE_SECURE === "true";
 const SESSION_DAYS = +process.env.SESSION_DAYS || 30;
-const COLLECTIONS = ["demandes", "clients", "dossiers", "devis", "factures"];
+const COLLECTIONS = ["demandes", "clients", "dossiers", "devis", "factures", "documents"];
 
-fs.mkdirSync(DATA_DIR, { recursive: true });
+const FILES_DIR = path.join(DATA_DIR, "fichiers");
+fs.mkdirSync(FILES_DIR, { recursive: true });
 
 // ---------------------------------------------------------------- Base de données
 const db = new Database(path.join(DATA_DIR, "cabinet.db"));
@@ -39,6 +40,7 @@ db.exec(`
   );
   CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK (id = 1), data TEXT NOT NULL);
   CREATE TABLE IF NOT EXISTS journal (at TEXT NOT NULL, user_id TEXT, action TEXT NOT NULL, detail TEXT);
+  CREATE TABLE IF NOT EXISTS files (id TEXT PRIMARY KEY, name TEXT, mime TEXT NOT NULL, size INTEGER NOT NULL, created_by TEXT, created_at TEXT NOT NULL);
 `);
 const newId = () => crypto.randomBytes(12).toString("hex");
 const now = () => new Date().toISOString();
@@ -179,6 +181,12 @@ app.delete("/api/docs/:col/:id", auth, (req, res) => {
   if (!row) return res.json({ ok: true });
   // Une facture émise ne se supprime pas (obligation comptable) : on l'annule par un avoir.
   if (col === "factures" && JSON.parse(row.data).statut === "emise") return res.status(400).json({ error: "facture_emise" });
+  // Copie archivée d'une facture émise : conservée (obligation comptable).
+  if (col === "documents") {
+    const doc = JSON.parse(row.data);
+    if (doc.type === "facture" || doc.type === "avoir") return res.status(400).json({ error: "archive_facture" });
+    if (doc.fileId) { db.prepare("DELETE FROM files WHERE id = ?").run(doc.fileId); fs.rmSync(path.join(FILES_DIR, doc.fileId), { force: true }); }
+  }
   db.prepare("DELETE FROM docs WHERE collection = ? AND id = ?").run(col, id);
   log(req.user, "suppression_" + col, row.num || id);
   res.json({ ok: true });
@@ -187,6 +195,25 @@ app.put("/api/settings", auth, adminOnly, (req, res) => {
   db.prepare("INSERT INTO settings (id, data) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data").run(JSON.stringify(req.body || {}));
   log(req.user, "parametres");
   res.json({ ok: true });
+});
+
+// ---------------------------------------------------------------- Fichiers (conventions, factures archivées, pièces déposées)
+const FILE_TYPES = ["application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "image/png", "image/jpeg", "image/webp"];
+app.post("/api/files", auth, express.raw({ type: () => true, limit: "25mb" }), (req, res) => {
+  const mime = String(req.headers["content-type"] || "").split(";")[0].trim();
+  if (!FILE_TYPES.includes(mime) || !req.body || !req.body.length) return res.status(400).json({ error: "format_non_supporte" });
+  const id = newId(), name = decodeURIComponent(String(req.headers["x-filename"] || "document")).slice(0, 200);
+  fs.writeFileSync(path.join(FILES_DIR, id), req.body);
+  db.prepare("INSERT INTO files VALUES (?,?,?,?,?,?)").run(id, name, mime, req.body.length, req.user.id, now());
+  res.json({ id, name, mime, size: req.body.length });
+});
+app.get("/files/:id", auth, (req, res) => {
+  const f = db.prepare("SELECT * FROM files WHERE id = ?").get(req.params.id);
+  if (!f || !fs.existsSync(path.join(FILES_DIR, f.id))) return res.status(404).json({ error: "introuvable" });
+  res.setHeader("Content-Type", f.mime);
+  res.setHeader("Content-Disposition", `${req.query.dl ? "attachment" : "inline"}; filename*=UTF-8''${encodeURIComponent(f.name || "document")}`);
+  res.setHeader("Cache-Control", "private, max-age=86400");
+  res.sendFile(path.join(FILES_DIR, f.id));
 });
 
 // ---------------------------------------------------------------- Équipe
@@ -241,6 +268,8 @@ app.post("/api/import", auth, adminOnly, (req, res) => {
 });
 
 // ---------------------------------------------------------------- Fichiers statiques
+app.get("/vendor/docx-preview.js", (req, res) => res.sendFile(path.join(__dirname, "node_modules", "docx-preview", "dist", "docx-preview.min.js"), { maxAge: "7d" }));
+app.get("/vendor/jszip.js", (req, res) => res.sendFile(path.join(__dirname, "node_modules", "jszip", "dist", "jszip.min.js"), { maxAge: "7d" }));
 app.get("/vendor/docx.js", (req, res) => res.sendFile(path.join(__dirname, "node_modules", "docx", "build", "index.umd.js"), { maxAge: "7d" }));
 app.get("/vendor/jspdf.js", (req, res) => res.sendFile(path.join(__dirname, "node_modules", "jspdf", "dist", "jspdf.umd.min.js"), { maxAge: "7d" }));
 // Version du logiciel : change à chaque mise en ligne. Elle est ajoutée à l'adresse du script (le navigateur
@@ -340,6 +369,8 @@ function backupNow() {
   const root = path.join(DATA_DIR, "sauvegardes");
   fs.mkdirSync(root, { recursive: true });
   return db.backup(path.join(root, "cabinet-" + day + ".db")).then(() => {
+    const fdest = path.join(root, "fichiers"); fs.mkdirSync(fdest, { recursive: true });
+    fs.readdirSync(FILES_DIR).forEach(f => { const t = path.join(fdest, f); if (!fs.existsSync(t)) fs.copyFileSync(path.join(FILES_DIR, f), t); });
     const all = fs.readdirSync(root).filter(f => /^cabinet-\d{4}-\d{2}-\d{2}\.db$/.test(f)).sort();
     all.slice(0, Math.max(0, all.length - 30)).forEach(f => fs.rmSync(path.join(root, f), { force: true }));
     console.log("Sauvegarde quotidienne : " + day);
