@@ -133,10 +133,11 @@ function nextNum(col) {
   }
   const st = db.prepare("SELECT data FROM settings WHERE id = 1").get(), s = st ? JSON.parse(st.data) : {};
   const year = new Date(Date.now() + 11 * 3600000).getUTCFullYear();
-  const pre = ((s.prefixes || {})[col] || PREFIX[col]) + "-" + year + "-";
+  // Factures : AAAA-NNNN (modèle du cabinet) ; devis : DEV-AAAA-NNN.
+  const pre = col === "factures" ? year + "-" : ((s.prefixes || {})[col] || PREFIX[col]) + "-" + year + "-";
   const max = db.prepare("SELECT num FROM docs WHERE collection = ? AND num LIKE ?").all(col, pre + "%")
     .reduce((a, r) => Math.max(a, parseInt(r.num.slice(pre.length), 10) || 0), 0);
-  return pre + String(max + 1).padStart(3, "0");
+  return pre + String(max + 1).padStart(col === "factures" ? 4 : 3, "0");
 }
 const numTaken = (col, num, id) => !!db.prepare("SELECT 1 FROM docs WHERE collection = ? AND num = ? AND id != ?").get(col, num, id);
 
@@ -240,6 +241,7 @@ app.post("/api/import", auth, adminOnly, (req, res) => {
 });
 
 // ---------------------------------------------------------------- Fichiers statiques
+app.get("/vendor/docx.js", (req, res) => res.sendFile(path.join(__dirname, "node_modules", "docx", "build", "index.umd.js"), { maxAge: "7d" }));
 app.get("/vendor/jspdf.js", (req, res) => res.sendFile(path.join(__dirname, "node_modules", "jspdf", "dist", "jspdf.umd.min.js"), { maxAge: "7d" }));
 // Version du logiciel : change à chaque mise en ligne. Elle est ajoutée à l'adresse du script (le navigateur
 // ne peut pas garder l'ancien) et consultée régulièrement par les pages ouvertes pour proposer de recharger.
@@ -282,6 +284,26 @@ app.use(express.static(path.join(__dirname, "public"), { index: false, setHeader
     db.prepare("INSERT INTO settings (id, data) VALUES (1, ?)").run(JSON.stringify(p));
     console.log("Paramètres du cabinet initialisés : " + (p.cabinet || ""));
   } catch (e) { console.warn("parametres-initiaux.json illisible"); }
+})();
+
+// ---------------------------------------------------------------- Mise à jour ponctuelle des paramètres
+// parametres-maj.json : champs fusionnés une seule fois dans les paramètres existants (lot identifié par « lot »).
+(function parametresMaj() {
+  const f = path.join(__dirname, "parametres-maj.json"); if (!fs.existsSync(f)) return;
+  let d; try { d = JSON.parse(fs.readFileSync(f, "utf8")); } catch (e) { console.warn("parametres-maj.json illisible"); return; }
+  const lot = "parametres-maj:" + (d.lot || "1");
+  if (db.prepare("SELECT 1 FROM journal WHERE action = 'reprise' AND detail = ?").get(lot)) return;
+  const st = db.prepare("SELECT data FROM settings WHERE id = 1").get(), cur = st ? JSON.parse(st.data) : {};
+  const p = Object.assign({}, d.parametres || {});
+  Object.keys(p).forEach(k => {
+    if (typeof p[k] === "string" && p[k][0] === "@") {
+      const src = path.join(__dirname, p[k].slice(1));
+      p[k] = fs.existsSync(src) ? "data:image/" + (/\.png$/i.test(src) ? "png" : "jpeg") + ";base64," + fs.readFileSync(src).toString("base64") : cur[k] || "";
+    }
+  });
+  db.prepare("INSERT INTO settings (id, data) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data").run(JSON.stringify(Object.assign(cur, p)));
+  db.prepare("INSERT INTO journal VALUES (?,?,?,?)").run(now(), null, "reprise", lot);
+  console.log("Paramètres du cabinet mis à jour (" + d.lot + ")");
 })();
 
 // ---------------------------------------------------------------- Reprise de dossiers existants

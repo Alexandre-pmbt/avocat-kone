@@ -1,0 +1,20 @@
+{
+  "_note": "Mise à jour des paramètres du cabinet, appliquée une seule fois (identifiée par « lot »). Les autres paramètres sont conservés. « @fichier » désigne une image du dépôt.",
+  "lot": "facture-modele-2026-11-15",
+  "parametres": {
+    "cabinet": "Cabinet Daniel RODRIGUEZ",
+    "avocat": "Maître Daniel RODRIGUEZ",
+    "titre": "Avocat",
+    "qualite": "Avocat au Barreau de Koné",
+    "adresse": "Immeuble Henriot – 169 rue Pierre Chivot – 98860 Koné",
+    "ville": "BP 523 – 98825 Pouembout",
+    "tel": "+687 999.708",
+    "email": "avocat.rodriguez@proton.me",
+    "ridet": "1 660 851.002",
+    "tgc": 6,
+    "logo": "@logo-cabinet.png",
+    "titulaire": "Cabinet Daniel RODRIGUEZ",
+    "ordreCheque": "Maître Daniel RODRIGUEZ",
+    "conditions": "Conditions de règlement et pénalités : conformément à la convention d'honoraires et aux règles déontologiques de la profession d'avocat, tout retard de paiement ou non-respect d'une échéance convenue pourra entraîner la suspension des diligences du Cabinet, après information préalable du Client, ainsi que la caducité de plein droit de l'accord de paiement échelonné (rendant l'intégralité du solde immédiatement exigible). Pour les clients professionnels, tout retard de paiement entraînera de plein droit, sans qu'un rappel soit nécessaire, l'application de pénalités de retard ainsi que d'une indemnité forfaitaire pour frais de recouvrement conformément à la réglementation économique en vigueur en Nouvelle-Calédonie."
+  }
+}

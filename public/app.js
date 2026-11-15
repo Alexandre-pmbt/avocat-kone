@@ -73,13 +73,13 @@ function totals(doc) {
 const paid = f => (f.paiements || []).reduce((a, p) => a + num(p.montant), 0);
 function factState(f) {
   if (f.statut !== "emise") return ["Brouillon", ""];
-  const t = totals(f).ttc, p = paid(f);
+  const t = totals(f).ttc, p = paid(f) + num(f.impute);
   if (f.avoir) return ["Avoir", "info"];
   if (p >= t && t > 0) return ["Payée", "ok"];
   if (f.echeance && daysTo(f.echeance) < 0) return [p > 0 ? "Partielle – en retard" : "En retard", "bad"];
   return [p > 0 ? "Partiellement payée" : "À régler", "warn"];
 }
-const reste = f => f.statut === "emise" && !f.avoir ? Math.max(0, totals(f).ttc - paid(f)) : 0;
+const reste = f => f.statut === "emise" && !f.avoir ? Math.max(0, totals(f).ttc - paid(f) - num(f.impute)) : 0;
 
 // ============================================================ Fenêtre modale
 function modal(html, mount) {
@@ -343,6 +343,7 @@ const dosRegle = d => (d.reglements || []).reduce((a, r) => a + num(r.montant), 
 const paysOf = d => (d.reglements || []).map(r => ({ date: r.date, montant: num(r.montant) }))
   .concat(D.factures.filter(f => f.dossierId === d.id && !f.avoir).flatMap(f => (f.paiements || []).map(p => ({ date: p.date, montant: num(p.montant) }))))
   .sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
+const acomptesDispo = (dosId, sauf) => { const d = dossier(dosId); if (!d) return 0; return Math.max(0, (d.reglements || []).reduce((a, r) => a + num(r.montant), 0) - D.factures.filter(f => f.dossierId === dosId && f.id !== sauf && !f.avoir).reduce((a, f) => a + num(f.impute), 0)); };
 const dosSolde = d => num(d.conventionMontant) ? Math.max(0, num(d.conventionMontant) - dosRegle(d)) : 0;
 const numCmp = (a, b) => ((parseInt(a.num, 10) || 0) - (parseInt(b.num, 10) || 0)) || String(a.num || "").localeCompare(String(b.num || ""));
 const nextEch = d => (d.echeances || []).filter(e => !e.fait && e.date).sort((a, b) => a.date.localeCompare(b.date))[0];
@@ -399,7 +400,7 @@ function vDossier(el, id) {
   const facTot = facts.filter(f => f.statut === "emise").reduce((a, f) => a + totals(f).ttc, 0), encTot = facts.reduce((a, f) => a + paid(f), 0);
   el.innerHTML = `
   <div class="head"><div><div class="small muted"><a href="#/dossiers">Dossiers</a> › ${esc(d.num)}</div><h1>${esc(d.intitule)}</h1></div><div class="sp"></div>
-    ${tag(ST_DOS, d.statut)}<button class="btn" id="ed">Modifier</button><button class="btn" id="nd">+ Devis</button><button class="btn pri" id="nf">+ Facture</button></div>
+    ${tag(ST_DOS, d.statut)}<button class="btn" id="ed">Modifier</button><button class="btn" id="cv">Convention</button><button class="btn" id="nd">+ Devis</button><button class="btn pri" id="nf">+ Facture</button></div>
   <div class="grid two">
     <div class="card"><h2>Informations</h2><dl class="kv">
       <dt>Client</dt><dd><a href="javascript:editClient('${c ? c.id : ""}')">${esc(clientName(c))}</a>${c ? `<div class="small muted">${esc([c.tel, c.email].filter(Boolean).join(" · "))}</div>` : ""}</dd>
@@ -436,6 +437,7 @@ function vDossier(el, id) {
   </div>`;
   const upd = async (fn, msg) => { const o = JSON.parse(JSON.stringify(dossier(id))); fn(o); try { await save("dossiers", o); if (msg) toast(msg); render(); } catch (e) { fail(e); } };
   $("#ed").onclick = () => editDossier(id);
+  $("#cv").onclick = () => conventionDialog(id);
   $("#nd").onclick = () => go(`devis/new?dossier=${id}`);
   $("#nf").onclick = () => go(`facture/new?dossier=${id}`);
   $("#aj").onclick = () => { const t = $("#jt").value.trim(); if (t) upd(o => (o.journal = o.journal || []).push({ id: uid(), date: today(), texte: t, by: ME.id })); };
@@ -518,10 +520,12 @@ function linesEditor(doc, locked) {
   <div class="totals" id="tot"></div>`;
 }
 function totalsHtml(doc) {
-  const t = totals(doc), p = doc.paiements ? paid(doc) : 0;
+  const t = totals(doc), p = doc.paiements ? paid(doc) : 0, imp = num(doc.impute);
   return `<div><span>Honoraires HT</span><span>${money(t.hon)}</span></div><div><span>TGC ${String(t.taux).replace(".", ",")} %</span><span>${money(t.tgc)}</span></div>
     ${t.deb ? `<div><span>Débours (non soumis)</span><span>${money(t.deb)}</span></div>` : ""}<div class="big"><span>Total TTC</span><span>${money(t.ttc)}</span></div>
-    ${doc.paiements && doc.statut === "emise" && !doc.avoir ? `<div><span>Déjà réglé</span><span>${money(p)}</span></div><div class="big"><span>Reste dû</span><span>${money(Math.max(0, t.ttc - p))}</span></div>` : ""}`;
+    ${doc.paiements && !doc.avoir && imp ? `<div><span>Moins acomptes versés</span><span>- ${money(imp)}</span></div>` : ""}
+    ${doc.paiements && doc.statut === "emise" && !doc.avoir && p ? `<div><span>Règlements reçus</span><span>- ${money(p)}</span></div>` : ""}
+    ${doc.paiements && !doc.avoir && (imp || (doc.statut === "emise" && p)) ? `<div class="big"><span>Solde net à payer</span><span>${money(Math.max(0, t.ttc - imp - (doc.statut === "emise" ? p : 0)))}</span></div>` : ""}`;
 }
 function bindLines(root, doc, locked, rerender) {
   const refresh = () => { $("#tot", root).innerHTML = totalsHtml(doc); (doc.lignes || []).forEach((l, i) => { const c = $(`[data-m="${i}"]`, root); if (c) c.textContent = money(num(l.qte) * num(l.pu)); }); };
@@ -606,6 +610,8 @@ function vFactureEdit(el, rawId) {
       <div class="f s1"><label>TGC %</label><input name="tgc" value="${esc(doc.tgc)}" ${locked ? "disabled" : ""}></div>
       <div class="f s1"><label>Date</label><input name="date" type="date" value="${esc(doc.date)}" ${locked ? "disabled" : ""}></div>
       <div class="f"><label>Échéance de paiement</label><input name="echeance" type="date" value="${esc(doc.echeance)}"></div>
+      ${doc.avoir ? "" : `<div class="f"><label>Acomptes déjà versés à déduire (F)</label><input name="impute" inputmode="numeric" value="${esc(doc.impute)}" ${locked ? "disabled" : ""}></div>
+      <div class="f s3 small muted" style="justify-content:flex-end">${doc.dossierId && !locked ? `Acomptes versés sur le dossier et non encore déduits : <b>${money(acomptesDispo(doc.dossierId, doc.id))}</b> ${acomptesDispo(doc.dossierId, doc.id) ? `<a href="javascript:void(0)" id="useimp">Déduire</a>` : ""}` : ""}</div>`}
     </div>
     <div style="margin-top:18px">${linesEditor(doc, locked)}</div>
   </div>
@@ -615,6 +621,8 @@ function vFactureEdit(el, rawId) {
   const rer = () => vFactureEdit(el, rawId);
   $$(".form [name]", el).forEach(i => i.addEventListener("change", () => { doc[i.name] = i.value; if (i.name === "clientId") { doc.dossierId = ""; rer(); } if (i.name === "tgc") $("#tot", el).innerHTML = totalsHtml(doc); if (locked && i.name === "echeance") persist().then(s => s && toast("Échéance modifiée")); }));
   $("[name=tgc]", el).addEventListener("input", e => { doc.tgc = e.target.value; $("#tot", el).innerHTML = totalsHtml(doc); });
+  if ($("[name=impute]", el)) $("[name=impute]", el).addEventListener("input", e => { doc.impute = e.target.value; $("#tot", el).innerHTML = totalsHtml(doc); });
+  if ($("#useimp", el)) $("#useimp", el).onclick = () => { doc.impute = Math.min(acomptesDispo(doc.dossierId, doc.id), totals(doc).ttc); rer(); };
   bindLines(el, doc, locked, rer);
   const persist = async (extra) => {
     if (!locked) $$(".form [name]", el).forEach(i => doc[i.name] = i.value);
@@ -656,89 +664,342 @@ function vFactureEdit(el, rawId) {
   $$("[data-rp]", el).forEach(b => b.onclick = async () => { if (!confirm("Supprimer ce règlement ?")) return; doc.paiements.splice(+b.dataset.rp, 1); const s = await persist(); if (s) rer(); });
 }
 
-// ============================================================ PDF devis / facture
+// ============================================================ PDF devis / facture (modèle du cabinet, allégé)
+// Montant en toutes lettres (francs CFP, nombres entiers).
+function enLettres(n) {
+  n = Math.round(Math.abs(n));
+  if (n === 0) return "zéro";
+  const U = ["", "un", "deux", "trois", "quatre", "cinq", "six", "sept", "huit", "neuf", "dix", "onze", "douze", "treize", "quatorze", "quinze", "seize", "dix-sept", "dix-huit", "dix-neuf"];
+  const T = ["", "dix", "vingt", "trente", "quarante", "cinquante", "soixante", "soixante", "quatre-vingt", "quatre-vingt"];
+  const cent = x => { // 0..999
+    let out = "", c = Math.floor(x / 100), r = x % 100;
+    if (c) out = (c > 1 ? U[c] + " cent" + (r === 0 ? "s" : "") : "cent");
+    if (r) {
+      let t = Math.floor(r / 10), u = r % 10, w;
+      if (r < 20) w = U[r];
+      else if (t === 7 || t === 9) w = T[t] + (t === 7 && u === 1 ? " et " : "-") + U[10 + u];
+      else w = T[t] + (u === 1 && t !== 8 ? " et un" : u ? "-" + U[u] : (t === 8 ? "s" : ""));
+      out += (out ? " " : "") + w;
+    }
+    return out;
+  };
+  const parts = [], mi = Math.floor(n / 1e9), m = Math.floor(n / 1e6) % 1000, k = Math.floor(n / 1000) % 1000, r = n % 1000;
+  if (mi) parts.push(cent(mi) + " milliard" + (mi > 1 ? "s" : ""));
+  if (m) parts.push(cent(m) + " million" + (m > 1 ? "s" : ""));
+  if (k) parts.push(k === 1 ? "mille" : cent(k).replace(/cents$/, "cent") + " mille");
+  if (r) parts.push(cent(r));
+  return parts.join(" ");
+}
+const LOGO_RED = [156, 21, 34], INK = [35, 32, 28], GOLD = [204, 169, 95], GREY = [105, 105, 112], SOFT = [244, 242, 238];
+
 function pdfDoc(doc, kind) {
   const { jsPDF } = window.jspdf, pdf = new jsPDF({ unit: "mm", format: "a4" });
   const s = S(), c = client(doc.clientId) || {}, dos = dossier(doc.dossierId), t = totals(doc);
-  const W = 210, M = 18, R = W - M, NAVY = [31, 42, 68], ACC = [138, 36, 50], GREY = [110, 115, 128];
-  const F = n => (n < 0 ? "-" : "") + grp(n) + " F CFP";
-  let y = 18;
-  // En-tête cabinet
-  let xText = M;
-  if (s.logo) { try { const p = pdf.getImageProperties(s.logo), h = 22, w = Math.min(45, h * p.width / p.height); pdf.addImage(s.logo, M, y - 4, w, w * p.height / p.width); xText = M + w + 6; } catch (e) { /* logo illisible */ } }
-  pdf.setFont("times", "bold"); pdf.setFontSize(16); pdf.setTextColor(...NAVY);
-  pdf.text(s.cabinet || s.avocat || "Cabinet", xText, y);
-  pdf.setFont("helvetica", "normal"); pdf.setFontSize(9); pdf.setTextColor(...GREY);
-  const head = [s.cabinet && s.avocat ? s.avocat : "", s.titre, s.adresse, s.ville, [s.tel ? "Tél. " + s.tel : "", s.email].filter(Boolean).join(" – "), s.ridet ? "RIDET " + s.ridet : ""].filter(Boolean);
-  head.forEach((l, i) => pdf.text(l, xText, y + 5.5 + i * 4.2));
-  y = Math.max(y + 5.5 + head.length * 4.2, 44) + 6;
-  // Titre
-  const title = kind === "devis" ? "DEVIS" : doc.avoir ? "AVOIR" : "FACTURE";
-  pdf.setFont("helvetica", "bold"); pdf.setFontSize(18); pdf.setTextColor(...ACC);
-  pdf.text(title + (doc.num ? " N° " + doc.num : " (brouillon)"), M, y);
-  pdf.setDrawColor(...ACC); pdf.setLineWidth(0.6); pdf.line(M, y + 2.5, M + 40, y + 2.5);
-  // Bloc client
-  const cx = 118; let cy = y + 10;
-  pdf.setFontSize(8); pdf.setTextColor(...GREY); pdf.setFont("helvetica", "normal"); pdf.text(kind === "devis" ? "DESTINATAIRE" : "FACTURÉ À", cx, cy - 4);
-  pdf.setFontSize(10.5); pdf.setTextColor(30, 34, 48); pdf.setFont("helvetica", "bold");
-  pdf.text(clientName(c), cx, cy); cy += 5; pdf.setFont("helvetica", "normal"); pdf.setFontSize(9.5);
-  if (c.type === "societe" && c.nom) { pdf.text("À l'attention de " + [c.civilite, c.prenom, c.nom].filter(Boolean).join(" "), cx, cy); cy += 4.5; }
-  String(c.adresse || "").split(/\n/).filter(Boolean).forEach(l => { pdf.splitTextToSize(l, R - cx).forEach(x => { pdf.text(x, cx, cy); cy += 4.5; }); });
-  if (c.ridet) { pdf.text("RIDET " + c.ridet, cx, cy); cy += 4.5; }
-  // Références
-  let ry = y + 10; pdf.setFontSize(9.5);
-  const ref = [["Date", fdate(doc.date)], kind === "devis" ? ["Valable jusqu'au", fdate(doc.validite)] : ["Échéance", fdate(doc.echeance)], dos ? ["Dossier", dos.num + (dos.rg ? " – RG " + dos.rg : "")] : null, doc.avoirDeNum ? ["Sur facture", doc.avoirDeNum] : null].filter(Boolean);
-  ref.forEach(([k, v]) => { pdf.setTextColor(...GREY); pdf.text(k, M, ry); pdf.setTextColor(30, 34, 48); pdf.text(v || "", M + 30, ry); ry += 5; });
-  y = Math.max(ry, cy) + 6;
-  if (doc.objet) { pdf.setFont("helvetica", "bold"); pdf.text("Objet : ", M, y); pdf.setFont("helvetica", "normal"); const ob = pdf.splitTextToSize(doc.objet, R - M - 14); pdf.text(ob, M + 14, y); y += ob.length * 4.6 + 4; }
-  // Tableau
-  const cols = { d: M + 2, q: 132, pu: 160, m: R - 2 };
-  const thead = () => { pdf.setFillColor(...NAVY); pdf.rect(M, y, R - M, 8, "F"); pdf.setTextColor(255); pdf.setFont("helvetica", "bold"); pdf.setFontSize(9);
-    pdf.text("Désignation", cols.d, y + 5.4); pdf.text("Qté", cols.q, y + 5.4, { align: "right" }); pdf.text("P.U. HT", cols.pu, y + 5.4, { align: "right" }); pdf.text("Montant HT", cols.m, y + 5.4, { align: "right" }); y += 8; };
+  const W = 210, M = 15, R = W - M, BOTTOM = 270;
+  const F = n => (n < 0 ? "-" : "") + grp(n) + " XPF";
+  const isFact = kind === "facture", title = !isFact ? "DEVIS D'HONORAIRES" : doc.avoir ? "AVOIR" : "FACTURE D'HONORAIRES";
+  const txt = (str, x, yy, o) => pdf.text(Array.isArray(str) ? str : String(str == null ? "" : str), x, yy, o);
+  const font = (st, size, col) => { pdf.setFont("helvetica", st); pdf.setFontSize(size); pdf.setTextColor(...(col || INK)); };
+  let y = 14;
+  const ensure = h => { if (y + h > BOTTOM) { pdf.addPage(); y = 18; return true; } return false; };
+
+  // ---- En-tête : logo + coordonnées à gauche, titre et références à droite
+  let ly = y;
+  if (s.logo) { try { pdf.addImage(s.logo, M, y, 52, 25.8); ly = y + 28.5; } catch (e) { /* logo illisible */ } }
+  if (ly === y) { font("bold", 15, INK); txt(s.cabinet || s.avocat, M, y + 6); ly = y + 10; }
+  font("normal", 8, GREY);
+  [[s.adresse, s.ville].filter(Boolean).join(" | "), [s.tel ? "Tél. : " + s.tel : "", s.email ? "Email : " + s.email : ""].filter(Boolean).join(" • "), s.ridet ? "N° RIDET : " + s.ridet : ""]
+    .filter(Boolean).forEach(l => { pdf.splitTextToSize(l, 92).forEach(x => { txt(x, M, ly); ly += 3.6; }); });
+  const rx = 112;
+  font("bold", 15, LOGO_RED); txt(title, R, y + 6, { align: "right" });
+  font("bold", 11, INK); txt(doc.num ? "N° " + doc.num : "(brouillon – non numérotée)", R, y + 12.5, { align: "right" });
+  const refs = [["Date d'émission", fdate(doc.date)], isFact ? ["Date d'échéance", fdate(doc.echeance)] : ["Valable jusqu'au", fdate(doc.validite)],
+    dos ? ["Référence dossier", "N° " + dos.num + " – " + dos.intitule] : null,
+    dos && dos.conventionDate ? ["Convention", "Signée le " + fdate(dos.conventionDate)] : null,
+    doc.devisNum ? ["Devis", doc.devisNum] : null, doc.avoirDeNum ? ["Sur facture", doc.avoirDeNum] : null].filter(Boolean);
+  let ry = y + 18; pdf.setDrawColor(...GOLD); pdf.setLineWidth(0.4); pdf.line(rx, ry - 2, R, ry - 2);
+  refs.forEach(([k, v]) => { font("normal", 8.5, GREY); txt(k + " :", rx, ry + 2); font("bold", 8.5, INK); const l = pdf.splitTextToSize(v, R - rx - 34); txt(l, rx + 33, ry + 2); ry += 4.6 * l.length; });
+  pdf.line(rx, ry, R, ry);
+  y = Math.max(ly, ry) + 5;
+
+  // ---- Blocs dossier / client
+  const bw = (R - M - 6) / 2, bx2 = M + bw + 6;
+  const block = (x, label, rows) => {
+    font("normal", 8.6, INK); let h = 7; const lines = rows.map(([k, v]) => { const l = pdf.splitTextToSize(String(v || "—"), bw - 36); h += Math.max(1, l.length) * 4.1 + 0.8; return [k, l]; });
+    return { h: h + 2, draw: (top, H) => {
+      pdf.setFillColor(...SOFT); pdf.rect(x, top, bw, H, "F"); pdf.setFillColor(...LOGO_RED); pdf.rect(x, top, 1.2, H, "F");
+      font("bold", 8, LOGO_RED); txt(label, x + 4, top + 5);
+      let yy = top + 10.5; lines.forEach(([k, l]) => { font("normal", 8.3, GREY); txt(k, x + 4, yy); font("normal", 8.6, INK); txt(l, x + 34, yy); yy += Math.max(1, l.length) * 4.1 + 0.8; });
+    } };
+  };
+  const objet = doc.objet || (dos ? dos.intitule : "");
+  const b1 = block(M, kind === "devis" ? "DOSSIER & MODE D'HONORAIRES" : "DOSSIER & MODE DE FACTURATION", [
+    ["Objet / Affaire", objet + (dos && dos.adverse ? " c/ " + dos.adverse : "")],
+    ["Juridiction / Domaine", dos ? [dos.juridiction, dos.rg ? "RG " + dos.rg : "", dos.domaine].filter(Boolean).join(" – ") || "Conseil" : "—"],
+    ["Facturation", dos ? (HON[dos.honoraires] || "Forfait") + (dos.honoraires === "horaire" && num(dos.taux) ? " (" + grp(num(dos.taux)) + " XPF HT/h)" : "") + (dos.aj ? " – " + dos.aj : "") : "Forfait"]]);
+  const b2 = block(bx2, isFact ? "FACTURÉ À (CLIENT)" : "DESTINATAIRE (CLIENT)", [
+    ["Nom / Raison sociale", clientName(c) + (c.type === "societe" && c.nom ? "\nReprésentée par " + [c.civilite, c.prenom, c.nom].filter(Boolean).join(" ") : "")],
+    c.ridet ? ["N° RIDET", c.ridet] : null, ["Adresse", c.adresse], ["Téléphone", c.tel], ["Email", c.email]].filter(Boolean));
+  const bh = Math.max(b1.h, b2.h); b1.draw(y, bh); b2.draw(y, bh); y += bh + 7;
+
+  // ---- Prestations
+  font("bold", 9.5, INK); txt("DÉSIGNATION DES PRESTATIONS" + (t.deb ? " ET DÉBOURS" : ""), M, y); y += 2.5;
+  const cols = { d: M + 2, q: 128, pu: 155, m: R - 2 };
+  const thead = () => { pdf.setFillColor(...INK); pdf.rect(M, y, R - M, 7.5, "F"); font("bold", 8.3, [255, 255, 255]);
+    txt("Description des diligences et frais", cols.d, y + 5); txt("Qté / h", cols.q, y + 5, { align: "right" }); txt("P.U. HT", cols.pu, y + 5, { align: "right" }); txt("Montant HT", cols.m, y + 5, { align: "right" }); y += 7.5; };
   thead();
-  pdf.setFont("helvetica", "normal"); pdf.setTextColor(30, 34, 48);
   const rows = (doc.lignes || []).filter(l => l.desc || num(l.pu));
   const section = (label, list) => {
     if (!list.length) return;
-    if (y > 250) { pdf.addPage(); y = 20; thead(); }
-    pdf.setFont("helvetica", "bold"); pdf.setFontSize(8.5); pdf.setTextColor(...ACC); pdf.text(label.toUpperCase(), cols.d, y + 5); y += 7;
-    pdf.setFont("helvetica", "normal"); pdf.setFontSize(9.5); pdf.setTextColor(30, 34, 48);
-    list.forEach((l, i) => {
-      const lines = pdf.splitTextToSize(l.desc || "", cols.q - cols.d - 14), h = Math.max(1, lines.length) * 4.4 + 3;
-      if (y + h > 262) { pdf.addPage(); y = 20; thead(); pdf.setFont("helvetica", "normal"); pdf.setFontSize(9.5); pdf.setTextColor(30, 34, 48); }
-      pdf.text(lines, cols.d, y + 4.4);
-      pdf.text(String(num(l.qte)).replace(".", ","), cols.q, y + 4.4, { align: "right" }); pdf.text(grp(num(l.pu)) === "0" ? "" : (num(l.pu) < 0 ? "-" : "") + grp(num(l.pu)), cols.pu, y + 4.4, { align: "right" });
-      pdf.text(F(Math.round(num(l.qte) * num(l.pu))), cols.m, y + 4.4, { align: "right" });
-      y += h; pdf.setDrawColor(228, 226, 220); pdf.setLineWidth(0.2); pdf.line(M, y, R, y);
+    if (ensure(14)) thead();
+    font("bold", 7.8, LOGO_RED); txt(label.toUpperCase(), cols.d, y + 4.6); y += 6.5;
+    list.forEach(l => {
+      font("normal", 9, INK);
+      const lines = pdf.splitTextToSize(l.desc || "", cols.q - cols.d - 16), h = Math.max(1, lines.length) * 4.2 + 2.8;
+      if (ensure(h)) { thead(); font("normal", 9, INK); }
+      txt(lines, cols.d, y + 4.2);
+      txt(String(num(l.qte)).replace(".", ","), cols.q, y + 4.2, { align: "right" });
+      txt((num(l.pu) < 0 ? "-" : "") + grp(num(l.pu)), cols.pu, y + 4.2, { align: "right" });
+      txt(F(Math.round(num(l.qte) * num(l.pu))), cols.m, y + 4.2, { align: "right" });
+      y += h; pdf.setDrawColor(226, 224, 218); pdf.setLineWidth(0.2); pdf.line(M, y, R, y);
     });
   };
   section("Honoraires", rows.filter(l => l.type !== "deb"));
-  section("Débours et frais (non soumis à TGC)", rows.filter(l => l.type === "deb"));
-  // Totaux
-  y += 5; if (y > 235) { pdf.addPage(); y = 25; }
-  const tl = [["Total honoraires HT", F(t.hon)], ["TGC " + String(t.taux).replace(".", ",") + " %", F(t.tgc)]];
-  if (t.deb) tl.push(["Débours", F(t.deb)]);
-  pdf.setFontSize(9.5);
-  tl.forEach(([k, v]) => { pdf.setTextColor(...GREY); pdf.text(k, 128, y); pdf.setTextColor(30, 34, 48); pdf.text(v, cols.m, y, { align: "right" }); y += 5.5; });
-  pdf.setFillColor(246, 233, 235); pdf.rect(124, y - 3.5, R - 124, 9, "F");
-  pdf.setFont("helvetica", "bold"); pdf.setFontSize(11); pdf.setTextColor(...ACC); pdf.text(doc.avoir ? "Total avoir TTC" : "Total TTC", 128, y + 2.6); pdf.text(F(t.ttc), cols.m, y + 2.6, { align: "right" }); y += 10;
-  if (kind === "facture" && !doc.avoir && doc.statut === "emise" && paid(doc) > 0) {
-    pdf.setFont("helvetica", "normal"); pdf.setFontSize(9.5); pdf.setTextColor(...GREY); pdf.text("Déjà réglé", 128, y + 2); pdf.setTextColor(30, 34, 48); pdf.text(F(paid(doc)), cols.m, y + 2, { align: "right" }); y += 5.5;
-    pdf.setFont("helvetica", "bold"); pdf.text("Reste à payer", 128, y + 2); pdf.text(F(reste(doc)), cols.m, y + 2, { align: "right" }); y += 8;
+  section("Frais externes et débours refacturés au réel (exonérés de TGC*)", rows.filter(l => l.type === "deb"));
+
+  // ---- Récapitulatif
+  y += 6; ensure(52);
+  const verse = isFact && !doc.avoir ? num(doc.impute) + paid(doc) : 0, net = Math.max(0, t.ttc - verse);
+  const kx = 118; let ky = y;
+  const krow = (k, v, bold, col) => { font(bold ? "bold" : "normal", bold ? 9.5 : 8.8, col || (bold ? INK : GREY)); txt(k, kx, ky); font(bold ? "bold" : "normal", bold ? 9.5 : 8.8, col || INK); txt(v, R - 2, ky, { align: "right" }); ky += 5.4; };
+  krow("Total honoraires HT", F(t.hon));
+  krow("TGC " + String(t.taux).replace(".", ",") + " %", F(t.tgc));
+  if (t.deb) krow("Débours (exonérés de TGC)", F(t.deb));
+  pdf.setFillColor(...SOFT); pdf.rect(kx - 3, ky - 4.2, R - kx + 3, 7.2, "F"); krow(doc.avoir ? "TOTAL AVOIR TTC" : "TOTAL TTC", F(t.ttc), true);
+  if (verse) {
+    krow("Moins acomptes versés", "- " + F(verse));
+    pdf.setFillColor(...LOGO_RED); pdf.rect(kx - 3, ky - 4.4, R - kx + 3, 7.6, "F"); krow("SOLDE NET À PAYER", F(net), true, [255, 255, 255]);
   }
-  // Pied : conditions, règlement, mentions
-  y += 4; pdf.setFont("helvetica", "normal"); pdf.setFontSize(9); pdf.setTextColor(30, 34, 48);
-  const foot = [];
-  if (kind === "devis") { if (doc.conditions) foot.push(doc.conditions); foot.push("Bon pour accord – date et signature du client :"); }
-  else if (!doc.avoir) { foot.push("Règlement à réception, au plus tard le " + fdate(doc.echeance) + "."); if (s.rib) foot.push("Règlement par virement : " + s.rib); }
-  foot.forEach(f => { const l = pdf.splitTextToSize(f, R - M); if (y + l.length * 4.4 > 275) { pdf.addPage(); y = 25; } pdf.text(l, M, y); y += l.length * 4.4 + 2; });
+  // Somme en lettres, à gauche
+  const somme = (isFact ? (doc.avoir ? "Arrêté le présent avoir" : "Arrêtée la présente facture") : "Arrêté le présent devis") + " à la somme de : " + enLettres(t.ttc) + " francs CFP (XPF)" + (verse && net !== t.ttc ? ", soit un solde net à payer de " + enLettres(net) + " francs CFP." : ".");
+  font("italic", 8.8, INK); const sl = pdf.splitTextToSize(somme, kx - M - 14);
+  pdf.setDrawColor(...GOLD); pdf.setLineWidth(0.4); pdf.rect(M, y - 4.5, kx - M - 8, sl.length * 4.3 + 5);
+  font("italic", 8.8, INK); txt(sl, M + 3, y);
+  let ly2 = y + sl.length * 4.3 + 5;
+  if (t.deb) { font("normal", 7.2, GREY); const n = pdf.splitTextToSize("* Débours exposés au nom et pour le compte du client, refacturés au franc le franc hors TGC sur présentation des justificatifs.", kx - M - 8); txt(n, M, ly2); ly2 += n.length * 3.2; }
+  y = Math.max(ky, ly2) + 5;
+
+  // ---- Versements reçus (facture)
+  if (isFact && !doc.avoir && verse) {
+    const ver = [].concat(num(doc.impute) ? [{ date: "", mode: "Acompte(s) versé(s) avant facturation", ref: "", montant: num(doc.impute) }] : [], doc.paiements || []);
+    ensure(10 + ver.length * 5);
+    font("bold", 8.5, INK); txt("Versements reçus imputés sur cette facture", M, y); y += 4.5;
+    ver.forEach(p => { font("normal", 8.5, INK); txt(p.date ? fdate(p.date) : "—", M + 2, y); txt([p.mode, p.ref].filter(Boolean).join(" – "), M + 26, y); txt(F(num(p.montant)), R - 2, y, { align: "right" }); y += 4.6; });
+    y += 3;
+  }
+
+  // ---- Paiement / signature
+  ensure(40);
+  pdf.setDrawColor(...GOLD); pdf.setLineWidth(0.4); pdf.line(M, y, R, y); y += 5;
+  const sx = 140; let py = y;
+  if (isFact && !doc.avoir) {
+    font("bold", 8.3, LOGO_RED); txt("MOYENS DE PAIEMENT", M, py); py += 4.8;
+    const vir = [s.banque ? "Banque : " + s.banque : "", "Titulaire : " + (s.titulaire || s.cabinet), s.rib ? "RIB / IBAN : " + s.rib : "RIB / IBAN : (à compléter dans Paramètres)", s.bic ? "Code BIC : " + s.bic : ""].filter(Boolean);
+    font("bold", 8.2, INK); txt("Par virement :", M, py); font("normal", 8.2, INK); vir.forEach((v, i) => txt(v, M + 22, py + i * 3.9)); py += vir.length * 3.9 + 0.6;
+    font("italic", 7.6, GREY); txt("Merci d'indiquer la référence Facture N° " + (doc.num || "…") + " en libellé du virement.", M + 22, py); py += 4.6;
+    font("bold", 8.2, INK); txt("Par chèque :", M, py); font("normal", 8.2, INK); txt("à l'ordre de « " + (s.ordreCheque || s.avocat) + " ».", M + 22, py); py += 4.4;
+    font("bold", 8.2, INK); txt("En espèces :", M, py); font("normal", 8.2, INK); txt("au secrétariat du Cabinet, contre remise d'un reçu.", M + 22, py); py += 4.4;
+  } else if (!isFact) {
+    font("bold", 8.3, LOGO_RED); txt("BON POUR ACCORD – LE CLIENT", M, py); py += 4.8;
+    font("normal", 8.2, GREY); txt("Date, signature précédée de la mention « Bon pour accord » :", M, py); py += 22;
+    if (doc.conditions) { font("normal", 8.2, INK); const l = pdf.splitTextToSize(doc.conditions, sx - M - 8); txt(l, M, y + 34); py = Math.max(py, y + 34 + l.length * 4); }
+  }
+  font("bold", 8.3, LOGO_RED); txt("POUR LE CABINET", sx, y);
+  font("bold", 9, INK); txt(s.avocat || "", sx, y + 5.5);
+  font("italic", 7.8, GREY); txt("(Cachet et signature)", sx, y + 10);
+  font("normal", 8.2, INK); txt("Fait à Koné, le " + fdate(doc.date || today()), sx, y + 26);
+  y = Math.max(py, y + 30) + 3;
+
+  // ---- Pied de page : conditions + pagination
   const n = pdf.getNumberOfPages();
   for (let i = 1; i <= n; i++) {
-    pdf.setPage(i); pdf.setFontSize(7.5); pdf.setTextColor(...GREY);
-    const ment = pdf.splitTextToSize(s.mentions || "", R - M); pdf.text(ment, W / 2, 287 - ment.length * 3.4, { align: "center" });
-    if (n > 1) pdf.text(i + " / " + n, R, 292, { align: "right" });
+    pdf.setPage(i); font("normal", 6.6, GREY); /* police fixée avant découpage */
+    const foot = pdf.splitTextToSize([isFact ? s.conditions : "", s.mentions].filter(Boolean).join("\n"), R - M);
+    txt(foot, M, 290 - foot.length * 2.8);
+    if (n > 1) txt(i + " / " + n, R, 293, { align: "right" });
   }
-  pdf.save((title.charAt(0) + title.slice(1).toLowerCase()) + "-" + (doc.num || "brouillon") + "-" + clientName(c).replace(/[^\w\- ]+/g, "").trim().replace(/\s+/g, "-") + ".pdf");
+  pdf.save((isFact ? (doc.avoir ? "Avoir" : "Facture") : "Devis") + "-" + (doc.num || "brouillon") + "-" + clientName(c).replace(/[^\w\- ]+/g, "").trim().replace(/\s+/g, "-") + ".pdf");
+}
+
+// ============================================================ Convention d'honoraires (Word), générée depuis le dossier
+function conventionDialog(dosId) {
+  const d = dossier(dosId), c = client(d.clientId) || {}, s = S();
+  const soc = c.type === "societe";
+  const missionDefaut = [
+    d.juridiction || d.adverse ? `Contentieux : représentation et assistance du Client${d.juridiction ? " devant " + d.juridiction : " devant les juridictions compétentes"}${d.adverse ? " dans le litige l'opposant à " + d.adverse : ""} (hors cassation) : étude du dossier, rédaction des actes et conclusions, préparation des plaidoiries, audiences.` : "",
+    "Conseil et assistance : analyses juridiques, rédaction de notes et assistance liées à ce dossier."
+  ].filter(Boolean).join("\n");
+  modal(`
+    <h2>Convention – dossier ${esc(d.num)}</h2>
+    <div class="form">
+      <div class="f s4"><label>Titre</label><select name="titre">${listOpts(["Convention d'assistance juridique et de représentation en justice", "Convention d'honoraires"], "Convention d'assistance juridique et de représentation en justice")}</select></div>
+      <div class="f"><label>Date de signature</label><input name="date" type="date" value="${today()}"></div>
+      <div class="f s6"><label>Client</label><input value="${esc(clientName(c))}${c.adresse ? " – " + esc(c.adresse.replace(/\n/g, ", ")) : " – adresse à compléter dans la fiche client"}" disabled></div>
+      ${soc ? `<div class="f s6"><label>Représenté(e) par</label><input name="representant" value="${esc([c.civilite, c.prenom, c.nom].filter(Boolean).join(" "))}" placeholder="Ex. : son gérant, M. …"></div>` : ""}
+      <div class="sec">Article 1 – Objet de la mission (une ligne par point)</div>
+      <div class="f s6"><textarea name="mission" style="min-height:100px">${esc(missionDefaut)}</textarea></div>
+      <div class="sec">Article 3 – Honoraires</div>
+      <div class="f"><label>Mode</label><select name="mode">${opts(HON, d.honoraires || "forfait")}</select></div>
+      <div class="f"><label>Montant du forfait (F)</label><input name="montant" inputmode="numeric" value="${esc(d.conventionMontant)}"></div>
+      <div class="f"><label>Montant exprimé</label><select name="base"><option value="HT">HT – TGC en sus</option><option value="TTC">TTC – taxes comprises</option></select></div>
+      <div class="f"><label>Taux horaire HT (F)</label><input name="taux" inputmode="numeric" value="${esc(d.taux || s.tauxHoraire || 25000)}"></div>
+      <div class="f"><label>Plafond des honoraires (F, facultatif)</label><input name="plafond" inputmode="numeric"></div>
+      <div class="f"><label>Honoraire de résultat (%)</label><input name="resultat" inputmode="decimal"></div>
+      <div class="f"><label>Provision à la signature (F)</label><input name="provision" inputmode="numeric"></div>
+      <div class="f s4"><label>Échéancier (facultatif)</label><input name="echeancier" placeholder="Ex. : le solde en 3 mensualités de 50 000 F à compter de janvier 2027"></div>
+      <div class="sec">Autres clauses</div>
+      <div class="f s3"><label><input type="checkbox" name="delais" checked style="width:auto"> Article « Réactivité et engagements » (délais de réponse)</label></div>
+      <div class="f s3"><label><input type="checkbox" name="carpa" checked style="width:auto"> Autorisation de prélèvement sur le compte CARPANC</label></div>
+      <div class="f"><label>Durée</label><select name="duree"><option value="mission">Jusqu'au terme de la mission</option><option value="periode">Période déterminée</option></select></div>
+      <div class="f per"><label>Du</label><input name="du" type="date" value="${today()}"></div>
+      <div class="f per"><label>Au</label><input name="au" type="date" value="${addDays(addDays(today(), 365), -1)}"></div>
+      <div class="f s6"><label><input type="checkbox" name="maj" checked style="width:auto"> Reporter le mode et le montant dans le dossier (la date de signature s'enregistre dans « Modifier » une fois la convention signée)</label></div>
+    </div>
+    <div class="actions"><div class="sp"></div><button class="btn ghost" id="c">Annuler</button><button class="btn pri" id="o">Générer la convention (Word)</button></div>`, (m, close) => {
+    const sync = () => {
+      const mode = $("[name=mode]", m).value, per = $("[name=duree]", m).value === "periode";
+      $$(".per", m).forEach(x => x.style.display = per ? "" : "none");
+      const show = (n, on) => { $(`[name=${n}]`, m).closest(".f").style.display = on ? "" : "none"; };
+      show("montant", ["forfait", "resultat"].includes(mode)); show("base", ["forfait", "resultat"].includes(mode));
+      show("taux", mode === "horaire"); show("plafond", mode === "horaire"); show("resultat", mode === "resultat");
+    };
+    $("[name=mode]", m).onchange = sync; $("[name=duree]", m).onchange = sync; sync();
+    $("#c", m).onclick = close;
+    $("#o", m).onclick = async () => {
+      const f = readForm(m);
+      try { await conventionDocx(d, c, f); } catch (e) { console.error(e); return alert("Impossible de générer la convention : " + e.message); }
+      if (f.maj) {
+        const o = JSON.parse(JSON.stringify(d)); o.honoraires = f.mode;
+        if (["forfait", "resultat"].includes(f.mode) && num(f.montant)) o.conventionMontant = num(f.montant);
+        if (f.mode === "horaire" && num(f.taux)) o.taux = num(f.taux);
+        (o.journal = o.journal || []).push({ id: uid(), date: today(), texte: "Convention d'honoraires générée (" + (HON[f.mode] || f.mode) + (num(f.montant) && f.mode !== "horaire" ? ", " + money(num(f.montant)) + " " + f.base : "") + ").", by: ME.id });
+        try { await save("dossiers", o); } catch (e) { fail(e); }
+      }
+      close(); toast("Convention générée"); render();
+    };
+  });
+}
+
+async function conventionDocx(d, c, f) {
+  const X = window.docx; if (!X) throw new Error("module Word indisponible");
+  const { Document, Packer, Paragraph, TextRun, ImageRun, Table, TableRow, TableCell, WidthType, AlignmentType, BorderStyle, Footer, PageNumber, TabStopType } = X;
+  const s = S(), soc = c.type === "societe";
+  const RED = "9C1522", INKC = "23201C", GREYC = "6B6B70", GOLDC = "CCA95F", FONT = "Aptos";
+  const run = (t, o) => new TextRun(Object.assign({ text: t, font: FONT, size: 22, color: INKC }, o || {}));
+  const para = (children, o) => new Paragraph(Object.assign({ children: Array.isArray(children) ? children : [run(children)], spacing: { after: 100, line: 276 } }, o || {}));
+  const just = (t, o) => para([run(t)], Object.assign({ alignment: AlignmentType.JUSTIFIED }, o || {}));
+  const bullet = t => new Paragraph({ children: [run(t)], bullet: { level: 0 }, alignment: AlignmentType.JUSTIFIED, spacing: { after: 60, line: 276 } });
+  const article = (n, t) => para([run(`Article ${n} : ${t}`, { bold: true, color: RED, size: 23 })], { spacing: { before: 260, after: 100 }, keepNext: true,
+    border: { bottom: { style: BorderStyle.SINGLE, size: 4, color: GOLDC, space: 2 } } });
+  const fmtF = v => grp(num(v)) + " F CFP";
+  const longDate = iso => { if (!iso) return "____________"; const M = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre", "novembre", "décembre"]; const [y, m, j] = iso.split("-"); return (+j === 1 ? "1er" : +j) + " " + M[+m - 1] + " " + y; };
+  const none = { style: BorderStyle.NONE, size: 0, color: "FFFFFF" }, noBorders = { top: none, bottom: none, left: none, right: none, insideHorizontal: none, insideVertical: none };
+  const children = [];
+
+  // En-tête : logo + coordonnées
+  const head = [];
+  if (s.logo) {
+    const b64 = s.logo.split(",")[1], bin = atob(b64), bytes = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    head.push(new Paragraph({ children: [new ImageRun({ data: bytes, transformation: { width: 190, height: 94 } })] }));
+  } else head.push(para([run(s.cabinet, { bold: true, size: 28 })]));
+  const coord = [s.adresse, s.ville, s.tel ? "Tél. : " + s.tel : "", s.email, s.ridet ? "RIDET : " + s.ridet : ""].filter(Boolean)
+    .map(l => new Paragraph({ alignment: AlignmentType.RIGHT, spacing: { after: 20 }, children: [run(l, { size: 16, color: GREYC })] }));
+  children.push(new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, borders: noBorders, rows: [new TableRow({ children: [
+    new TableCell({ width: { size: 45, type: WidthType.PERCENTAGE }, borders: noBorders, children: head }),
+    new TableCell({ width: { size: 55, type: WidthType.PERCENTAGE }, borders: noBorders, verticalAlign: "center", children: coord })] })] }));
+  children.push(new Paragraph({ spacing: { after: 240 }, border: { bottom: { style: BorderStyle.SINGLE, size: 8, color: GOLDC, space: 1 } }, children: [] }));
+
+  // Titre
+  const titre = f.titre.toUpperCase().replace("JURIDIQUE ET DE", "JURIDIQUE\nET DE").split("\n");
+  titre.forEach((t, i) => children.push(new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: i === titre.length - 1 ? 60 : 0 }, children: [run(t, { bold: true, size: 30, color: RED })] })));
+  children.push(new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 300 }, children: [run(`Dossier n° ${d.num} – ${d.intitule}`, { size: 19, color: GREYC, italics: true })] }));
+
+  // Parties
+  children.push(para([run("ENTRE LES SOUSSIGNÉS", { bold: true })], { spacing: { after: 160 } }));
+  const cname = clientName(c);
+  children.push(para([run(cname, { bold: true })], { spacing: { after: 40 } }));
+  if (soc && f.representant) children.push(para("Représentée par " + f.representant, { spacing: { after: 40 } }));
+  if (c.ridet) children.push(para("RIDET : " + c.ridet, { spacing: { after: 40 } }));
+  children.push(para((soc ? "Dont le siège est situé " : "Demeurant ") + (c.adresse ? (soc ? "" : "") + c.adresse.replace(/\n/g, ", ") : "____________________________________"), { spacing: { after: 40 } }));
+  children.push(para([run("Ci-après « le Client », d'une part,", { italics: true })], { spacing: { after: 200 } }));
+  children.push(para([run("ET", { bold: true })], { spacing: { after: 200 } }));
+  children.push(para([run((s.cabinet || "Le Cabinet").replace(/^Cabinet/, "Le Cabinet"), { bold: true })], { spacing: { after: 40 } }));
+  if (s.qualite || s.titre) children.push(para(s.qualite || s.titre, { spacing: { after: 40 } }));
+  children.push(para("Domicilié " + [s.adresse].filter(Boolean).join(""), { spacing: { after: 40 } }));
+  children.push(para("Agissant aux présentes par " + (s.avocat || "").replace(/^Maître\s+/, ""), { spacing: { after: 40 } }));
+  children.push(para([run("Ci-après « l'Avocat », d'autre part.", { italics: true })], { spacing: { after: 260 } }));
+  children.push(para([run("IL A ÉTÉ CONVENU ET ARRÊTÉ CE QUI SUIT :", { bold: true })], { spacing: { after: 120 } }));
+
+  // Articles
+  let n = 1;
+  children.push(article(n++, "Objet"));
+  children.push(just("La présente convention régit la fixation des honoraires d'assistance et de conseil juridique, de rédaction d'actes, de représentation en justice et de plaidoirie pour la mission que le Client confie au Cabinet, telle que décrite ci-après :"));
+  f.mission.split("\n").map(x => x.trim()).filter(Boolean).forEach(x => children.push(bullet(x.replace(/^[-–•]\s*/, ""))));
+
+  if (f.delais) {
+    children.push(article(n++, "Réactivité et engagements"));
+    children.push(just("Le Cabinet s'engage à respecter les délais de réponse suivants :"));
+    ["Accusé de réception des demandes : sous 4 heures.", "Conseils simples : sous 24 à 48 heures maximum.", "Consultations complexes : sous 7 à 10 jours, sauf urgence signalée par le Client."].forEach(x => children.push(bullet(x)));
+  }
+
+  children.push(article(n++, "Honoraires et frais"));
+  const tgc = String(num(s.tgc)).replace(".", ",");
+  if (f.mode === "horaire") {
+    children.push(just(`Les prestations sont facturées sur la base d'un taux horaire de ${fmtF(f.taux)} hors taxes, augmenté des taxes en vigueur (TGC ${tgc} %).`));
+    if (num(f.plafond)) children.push(bullet(`Le montant total des honoraires ne pourra excéder ${fmtF(f.plafond)} hors taxes.`));
+  } else if (f.mode === "aj") {
+    children.push(just(`La mission est réalisée au titre de l'aide juridictionnelle${d.aj ? " (" + d.aj + ")" : ""}. Si celle-ci n'est que partielle ou venait à être retirée, les honoraires restant à la charge du Client seront fixés d'un commun accord par avenant à la présente convention.`));
+  } else if (f.mode === "assurance") {
+    children.push(just("Les honoraires sont pris en charge par l'assureur de protection juridique du Client, dans la limite des plafonds prévus à son contrat. Les honoraires excédant cette prise en charge restent dus par le Client, sur la base d'un taux horaire de " + fmtF(f.taux) + " hors taxes, augmenté des taxes en vigueur (TGC " + tgc + " %)."));
+  } else {
+    const mt = num(f.montant);
+    children.push(just(mt ? (f.base === "TTC" ? `Les honoraires sont fixés forfaitairement à la somme de ${fmtF(mt)} toutes taxes comprises.` : `Les honoraires sont fixés forfaitairement à la somme de ${fmtF(mt)} hors taxes, augmentée de la TGC au taux en vigueur (${tgc} %), soit ${fmtF(Math.round(mt * (1 + num(s.tgc) / 100)))} TTC.`) : "Les honoraires sont fixés forfaitairement à la somme de ____________ F CFP hors taxes, augmentée des taxes en vigueur."));
+    if (f.mode === "resultat") children.push(just(`Il s'y ajoute un honoraire complémentaire de résultat égal à ${String(num(f.resultat) || "___").replace(".", ",")} % hors taxes des sommes obtenues ou économisées par le Client, exigible à l'issue définitive de la procédure.`));
+  }
+  if (num(f.provision)) children.push(just(`Une provision de ${fmtF(f.provision)} est versée à la signature de la présente convention ; elle s'impute sur les honoraires dus.`));
+  children.push(just("Les frais de déplacement, timbres de plaidoirie et débours divers (courriers recommandés, copies, frais d'huissier, droits de greffe, etc.) sont facturés en sus, sur présentation de justificatifs."));
+  children.push(just("Un devis pourra être établi à la demande du Client pour toute mission complémentaire déterminée."));
+
+  children.push(article(n++, "Modalités de règlement"));
+  children.push(just("Les honoraires et remboursements de frais sont réglés à réception de facture." + (f.echeancier ? " Par dérogation, les parties conviennent de l'échéancier suivant : " + f.echeancier.replace(/\.?$/, ".") : "")));
+  if (f.carpa) children.push(just("Le Client autorise le Cabinet à prélever les montants dus sur les fonds transitant par le compte ouvert auprès de la Caisse des Règlements Pécuniaires des Avocats (CARPANC)."));
+
+  children.push(article(n++, "Durée"));
+  if (f.duree === "periode") { children.push(just(`La présente convention est conclue pour une durée déterminée, du ${longDate(f.du)} au ${longDate(f.au)}.`)); children.push(just("Elle n'est pas reconductible tacitement.")); }
+  else children.push(just("La présente convention prend effet à la date de sa signature et vaut pour toute la durée de la mission décrite à l'article 1, jusqu'à son terme. Toute mission nouvelle fera l'objet d'un avenant ou d'une nouvelle convention."));
+
+  children.push(article(n++, "Protection des données à caractère personnel"));
+  children.push(just("Le Cabinet met en œuvre des traitements de données pour la gestion des dossiers, la facturation et le respect de ses obligations légales (notamment la lutte contre le blanchiment)."));
+  children.push(just("Les données sont conservées pendant la durée de la relation contractuelle, augmentée des délais de prescription légaux."));
+  children.push(just(`Les personnes concernées disposent des droits d'accès, de rectification, d'opposition, d'effacement et de portabilité, qu'elles peuvent exercer auprès du Cabinet à l'adresse suivante : ${[s.adresse, s.ville].filter(Boolean).join(" – ")}${s.email ? " ou par courriel à " + s.email : ""}. Elles peuvent également saisir l'autorité de contrôle compétente.`));
+
+  children.push(para(`Fait à Koné, le ${longDate(f.date)}, en deux exemplaires originaux.`, { spacing: { before: 320, after: 280 } }));
+
+  // Signatures
+  const sigCell = lines => new TableCell({ width: { size: 50, type: WidthType.PERCENTAGE }, borders: noBorders, children: lines.map((l, i) => new Paragraph({ spacing: { after: 40 }, children: [run(l, i === 0 ? { bold: true } : { size: 20, color: i === lines.length - 1 ? GREYC : INKC, italics: i === lines.length - 1 })] })) });
+  children.push(new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, borders: noBorders, rows: [new TableRow({ children: [
+    sigCell(soc ? ["Pour " + cname, f.representant || "Son représentant légal", "", "", "« Lu et approuvé », signature"] : ["Le Client", cname, "", "", "« Lu et approuvé », signature"]),
+    sigCell(["Pour le Cabinet", s.avocat || "", "", "", "Signature et cachet"])] })] }));
+
+  const footer = new Footer({ children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [
+    run(`${s.cabinet} – ${f.titre} – Dossier n° ${d.num} – Page `, { size: 15, color: GREYC }), new TextRun({ children: [PageNumber.CURRENT], font: FONT, size: 15, color: GREYC }),
+    run(" / ", { size: 15, color: GREYC }), new TextRun({ children: [PageNumber.TOTAL_PAGES], font: FONT, size: 15, color: GREYC })] })] });
+  const docx = new Document({ creator: s.cabinet, title: f.titre, styles: { default: { document: { run: { font: FONT, size: 22 } } } },
+    sections: [{ properties: { page: { margin: { top: 1134, right: 1417, bottom: 1134, left: 1417 } } }, footers: { default: footer }, children }] });
+  const blob = await Packer.toBlob(docx);
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
+  a.download = `Convention-${d.num}-${cname.replace(/[^\w\- ]+/g, "").trim().replace(/\s+/g, "-")}.docx`;
+  document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
 }
 
 // ============================================================ Paramètres
@@ -751,13 +1012,20 @@ function vParametres(el) {
       <div class="sec">Cabinet (en-tête des devis et factures)</div>
       <div class="f s3"><label>Nom du cabinet</label><input name="cabinet" value="${esc(s.cabinet)}" placeholder="Cabinet Maître …"></div>
       <div class="f s3"><label>Avocat</label><input name="avocat" value="${esc(s.avocat)}" placeholder="Maître Prénom NOM"></div>
-      <div class="f s3"><label>Titre</label><input name="titre" value="${esc(s.titre)}" placeholder="Avocat au Barreau de Nouméa"></div>
+      <div class="f s3"><label>Titre</label><input name="titre" value="${esc(s.titre)}" placeholder="Avocat"></div>
+      <div class="f s3"><label>Qualité (conventions)</label><input name="qualite" value="${esc(s.qualite)}" placeholder="Avocat au Barreau de …"></div>
       <div class="f s3"><label>RIDET</label><input name="ridet" value="${esc(s.ridet)}"></div>
       <div class="f s3"><label>Adresse</label><input name="adresse" value="${esc(s.adresse)}"></div>
-      <div class="f s3"><label>Code postal et ville</label><input name="ville" value="${esc(s.ville)}"></div>
+      <div class="f s3"><label>Boîte postale / ville</label><input name="ville" value="${esc(s.ville)}"></div>
       <div class="f s3"><label>Téléphone</label><input name="tel" value="${esc(s.tel)}"></div>
       <div class="f s3"><label>E-mail</label><input name="email" value="${esc(s.email)}"></div>
-      <div class="f s6"><label>Coordonnées bancaires (banque, IBAN / RIB)</label><input name="rib" value="${esc(s.rib)}"></div>
+      <div class="sec">Paiement (bas des factures)</div>
+      <div class="f s3"><label>Banque</label><input name="banque" value="${esc(s.banque)}"></div>
+      <div class="f s3"><label>Titulaire du compte</label><input name="titulaire" value="${esc(s.titulaire)}"></div>
+      <div class="f s4"><label>RIB / IBAN</label><input name="rib" value="${esc(s.rib)}"></div>
+      <div class="f"><label>Code BIC</label><input name="bic" value="${esc(s.bic)}"></div>
+      <div class="f s3"><label>Chèques à l'ordre de</label><input name="ordreCheque" value="${esc(s.ordreCheque)}"></div>
+      <div class="f s6"><label>Conditions de règlement et pénalités (pied des factures)</label><textarea name="conditions" style="min-height:90px">${esc(s.conditions)}</textarea></div>
       <div class="f s6"><label>Mentions en bas de page</label><textarea name="mentions" placeholder="Membre d'une association agréée… / Assurance RCP…">${esc(s.mentions)}</textarea></div>
       <div class="f s3"><label>Logo</label><input type="file" id="logo" accept="image/png,image/jpeg"></div>
       <div class="f s3"><label>&nbsp;</label><div>${s.logo ? `<img src="${s.logo}" style="max-height:48px;vertical-align:middle"> <button class="btn sm ghost" id="rmlogo">Retirer</button>` : '<span class="muted small">Aucun logo</span>'}</div></div>
