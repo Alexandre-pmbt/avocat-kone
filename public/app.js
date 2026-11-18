@@ -1203,6 +1203,16 @@ async function boot() {
 }
 boot();
 
+// Pas de suggestions du navigateur (anciennes saisies) dans les champs du logiciel, sauf à la connexion.
+(function sansSuggestions() {
+  const off = root => $$("input:not([type=password]):not([type=file]):not([type=checkbox]), textarea", root).forEach(i => {
+    if (i.closest("#lf")) return;
+    i.setAttribute("autocomplete", "off"); if (i.list === null) i.setAttribute("autocomplete", "off");
+  });
+  off(document);
+  new MutationObserver(ms => ms.forEach(m => m.addedNodes.forEach(n => { if (n.nodeType === 1) off(n.parentNode || n); }))).observe(document.body, { childList: true, subtree: true });
+})();
+
 // Mise à jour : si une nouvelle version est mise en ligne pendant que la page est ouverte, on propose de recharger.
 (function watchVersion() {
   const mine = (document.querySelector('meta[name="app-version"]') || {}).content;
