@@ -141,6 +141,15 @@ function nextNum(col) {
     .reduce((a, r) => Math.max(a, parseInt(r.num.slice(pre.length), 10) || 0), 0);
   return pre + String(max + 1).padStart(col === "factures" ? 4 : 3, "0");
 }
+// Devis : numérotés d'après le dossier → DEV-<n° dossier>-01, -02… (sans dossier : DEV-AAAA-NNN).
+function devisNum(dossierId, sauf) {
+  const dos = dossierId ? db.prepare("SELECT num FROM docs WHERE collection = 'dossiers' AND id = ?").get(dossierId) : null;
+  if (!dos || !dos.num) return nextNum("devis");
+  const pre = "DEV-" + String(dos.num).toUpperCase().replace(/\s+/g, "") + "-";
+  const max = db.prepare("SELECT num FROM docs WHERE collection = 'devis' AND num LIKE ? AND id != ?").all(pre + "%", sauf || "")
+    .reduce((a, r) => Math.max(a, parseInt(r.num.slice(pre.length), 10) || 0), 0);
+  return pre + String(max + 1).padStart(2, "0");
+}
 const numTaken = (col, num, id) => !!db.prepare("SELECT 1 FROM docs WHERE collection = ? AND num = ? AND id != ?").get(col, num, id);
 
 app.put("/api/docs/:col/:id", auth, (req, res) => {
@@ -159,10 +168,13 @@ app.put("/api/docs/:col/:id", auth, (req, res) => {
       body.createdBy = prev.createdBy; body.createdAt = prev.createdAt;
       // Une facture émise garde son numéro ; la numérotation est attribuée au moment de l'émission.
       if (col === "factures" && !existing.num && body.statut === "emise") body.num = nextNum(col);
+      // Devis rattaché à un autre dossier : il prend la numérotation de ce dossier.
+      if (col === "devis" && body.dossierId && body.dossierId !== prev.dossierId) body.num = devisNum(body.dossierId, id);
     } else {
       body.createdBy = req.user.id; body.createdAt = now();
       body.num = null;
-      if (col === "devis" || col === "dossiers" || (col === "factures" && body.statut === "emise")) body.num = nextNum(col);
+      if (col === "devis") body.num = devisNum(body.dossierId, id);
+      else if (col === "dossiers" || (col === "factures" && body.statut === "emise")) body.num = nextNum(col);
     }
     if (wanted) body.num = wanted;
     body.updatedAt = now(); body.updatedBy = req.user.id;
@@ -333,6 +345,33 @@ app.use(express.static(path.join(__dirname, "public"), { index: false, setHeader
   db.prepare("INSERT INTO settings (id, data) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data").run(JSON.stringify(Object.assign(cur, p)));
   db.prepare("INSERT INTO journal VALUES (?,?,?,?)").run(now(), null, "reprise", lot);
   console.log("Paramètres du cabinet mis à jour (" + d.lot + ")");
+})();
+
+// ---------------------------------------------------------------- Renumérotation ponctuelle : dernier devis du client DINET
+(function renumeroterDevisDinet() {
+  const lot = "devis-dinet-2026-11-18";
+  if (db.prepare("SELECT 1 FROM journal WHERE action = 'reprise' AND detail = ?").get(lot)) return;
+  const norm = v => String(v || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
+  const clients = db.prepare("SELECT id, data FROM docs WHERE collection = 'clients'").all()
+    .filter(r => { const c = JSON.parse(r.data); return norm([c.nom, c.prenom, c.societe].join(" ")).includes("DINET"); }).map(r => r.id);
+  const devis = db.prepare("SELECT id, num, data FROM docs WHERE collection = 'devis'").all().map(r => Object.assign(JSON.parse(r.data), { id: r.id, num: r.num }))
+    .filter(d => clients.includes(d.clientId)).sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+  const d = devis[0];
+  if (!d) { console.log("Renumérotation DINET : aucun devis trouvé (sera retentée au prochain démarrage)"); return; }
+  if (!d.dossierId) { console.log("Renumérotation DINET : le devis " + d.num + " n'est rattaché à aucun dossier"); return; }
+  const ancien = d.num, nouveau = devisNum(d.dossierId, d.id);
+  db.transaction(() => {
+    const body = Object.assign({}, d, { num: nouveau, updatedAt: now() }); delete body.id;
+    db.prepare("UPDATE docs SET num = ?, data = ?, updated_at = ? WHERE collection = 'devis' AND id = ?").run(nouveau, JSON.stringify(body), now(), d.id);
+    // Factures établies depuis ce devis : référence mise à jour.
+    db.prepare("SELECT id, data FROM docs WHERE collection = 'factures'").all().forEach(r => {
+      const f = JSON.parse(r.data); if (f.devisId !== d.id) return;
+      f.devisNum = nouveau; db.prepare("UPDATE docs SET data = ? WHERE collection = 'factures' AND id = ?").run(JSON.stringify(f), r.id);
+    });
+    db.prepare("INSERT INTO journal VALUES (?,?,?,?)").run(now(), null, "reprise", lot);
+    db.prepare("INSERT INTO journal VALUES (?,?,?,?)").run(now(), null, "renumerotation_devis", ancien + " -> " + nouveau);
+  })();
+  console.log("Devis DINET renuméroté : " + ancien + " -> " + nouveau);
 })();
 
 // ---------------------------------------------------------------- Reprise de dossiers existants
