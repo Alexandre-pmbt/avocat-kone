@@ -427,7 +427,7 @@ function vDossier(el, id) {
         <td class="num"><button class="btn sm ghost" data-delech="${e.id}">×</button></td></tr>`; }).join("")}</table>` : `<div class="empty">Aucune échéance</div>`}</div>
     <div class="card"><div class="head" style="margin-bottom:8px"><h2 style="margin:0">Suivi du dossier</h2><div class="sp"></div></div>
       <div style="display:flex;gap:8px;margin-bottom:10px"><input id="jt" placeholder="Ajouter une note (appel, courrier, audience…)" style="flex:1;border:1px solid var(--line);border-radius:6px;padding:8px 10px"><button class="btn" id="aj">Ajouter</button></div>
-      ${(d.journal || []).length ? `<ul class="timeline">${d.journal.slice().sort(byDesc("date")).map(j => `<li><span class="small muted">${fdate(j.date)}${j.by ? " · " + esc(D.users[j.by] || "") : ""}</span><div style="white-space:pre-wrap">${esc(j.texte)}</div></li>`).join("")}</ul>` : `<div class="empty">Aucune note</div>`}</div>
+      ${(d.journal || []).length ? `<ul class="timeline">${d.journal.slice().sort(byDesc("date")).map(j => `<li style="display:flex;gap:8px;align-items:flex-start"><div style="flex:1"><span class="small muted">${fdate(j.date)}${j.by ? " · " + esc(D.users[j.by] || "") : ""}</span><div style="white-space:pre-wrap">${esc(j.texte)}</div></div><button class="btn sm ghost" data-deljour="${esc(j.id || "")}" data-txt="${esc((j.date || "") + "|" + (j.texte || ""))}" title="Supprimer cette note">×</button></li>`).join("")}</ul>` : `<div class="empty">Aucune note</div>`}</div>
     <div class="card"><div class="head" style="margin-bottom:8px"><h2 style="margin:0">Temps passé</h2><div class="sp"></div>
       ${hNon ? `<button class="btn sm" id="ft">Facturer ${String(hNon).replace(".", ",")} h</button>` : ""}<button class="btn sm" id="at">+ Saisir</button></div>
       ${temps.length ? `<table>${temps.map(t => `<tr><td style="white-space:nowrap">${fdate(t.date)}</td><td>${esc(t.desc)}</td><td class="num">${String(num(t.heures)).replace(".", ",")} h</td><td>${t.factureId ? '<span class="tag ok">Facturé</span>' : `<button class="btn sm ghost" data-deltps="${t.id}">×</button>`}</td></tr>`).join("")}
@@ -448,6 +448,10 @@ function vDossier(el, id) {
   $("#jt").onkeydown = e => { if (e.key === "Enter") $("#aj").click(); };
   $$("[data-ech]").forEach(cb => cb.onchange = () => upd(o => { const e = o.echeances.find(x => x.id === cb.dataset.ech); e.fait = cb.checked; }));
   $$("[data-delech]").forEach(b => b.onclick = () => confirm("Supprimer cette échéance ?") && upd(o => o.echeances = o.echeances.filter(x => x.id !== b.dataset.delech)));
+  $$("[data-deljour]").forEach(b => b.onclick = () => confirm("Supprimer cette note du suivi ?") && upd(o => {
+    const i = o.journal.findIndex(j => b.dataset.deljour ? j.id === b.dataset.deljour : (j.date || "") + "|" + (j.texte || "") === b.dataset.txt);
+    if (i >= 0) o.journal.splice(i, 1);
+  }, "Note supprimée"));
   $$("[data-delreg]").forEach(b => b.onclick = () => confirm("Supprimer ce règlement ?") && upd(o => o.reglements = o.reglements.filter(x => x.id !== b.dataset.delreg)));
   $("#ar").onclick = () => modal(`<h2>Règlement reçu – dossier ${esc(d.num)}</h2><div class="form">
       <div class="f"><label>Date</label><input name="date" type="date" value="${today()}"></div>
@@ -893,7 +897,9 @@ function conventionDialog(dosId) {
         const o = JSON.parse(JSON.stringify(d)); o.honoraires = f.mode;
         if (["forfait", "resultat"].includes(f.mode) && num(f.montant)) o.conventionMontant = num(f.montant);
         if (f.mode === "horaire" && num(f.taux)) o.taux = num(f.taux);
-        (o.journal = o.journal || []).push({ id: uid(), date: today(), texte: "Convention d'honoraires générée (" + (HON[f.mode] || f.mode) + (num(f.montant) && f.mode !== "horaire" ? ", " + money(num(f.montant)) + " " + f.base : "") + ").", by: ME.id });
+        const note = "Convention d'honoraires générée (" + (HON[f.mode] || f.mode) + (num(f.montant) && f.mode !== "horaire" ? ", " + money(num(f.montant)) + " " + f.base : "") + ").";
+        o.journal = o.journal || [];
+        if (!o.journal.some(j => j.date === today() && j.texte === note)) o.journal.push({ id: uid(), date: today(), texte: note, by: ME.id });
         try { await save("dossiers", o); } catch (e) { fail(e); }
       }
       close(); render(); toast("Convention générée et classée dans le dossier"); viewDocument(saved);
