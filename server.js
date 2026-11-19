@@ -347,6 +347,29 @@ app.use(express.static(path.join(__dirname, "public"), { index: false, setHeader
   console.log("Paramètres du cabinet mis à jour (" + d.lot + ")");
 })();
 
+// ---------------------------------------------------------------- Cabinet non assujetti à la TGC (une seule fois)
+// TGC à 0 dans les paramètres, les devis et les factures en brouillon ; les factures émises ne sont pas modifiées.
+(function sansTgc() {
+  const lot = "sans-tgc-2026-11-19";
+  if (db.prepare("SELECT 1 FROM journal WHERE action = 'reprise' AND detail = ?").get(lot)) return;
+  let devis = 0, brouillons = 0, emises = [];
+  db.transaction(() => {
+    const st = db.prepare("SELECT data FROM settings WHERE id = 1").get();
+    const cur = st ? JSON.parse(st.data) : {}; cur.tgc = 0;
+    db.prepare("INSERT INTO settings (id, data) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data").run(JSON.stringify(cur));
+    db.prepare("SELECT collection, id, num, data FROM docs WHERE collection IN ('devis', 'factures')").all().forEach(r => {
+      const d = JSON.parse(r.data);
+      if (!(Number(d.tgc) > 0)) return;
+      if (r.collection === "factures" && d.statut === "emise") { emises.push(r.num); return; }
+      d.tgc = 0; db.prepare("UPDATE docs SET data = ? WHERE collection = ? AND id = ?").run(JSON.stringify(d), r.collection, r.id);
+      if (r.collection === "devis") devis++; else brouillons++;
+    });
+    db.prepare("INSERT INTO journal VALUES (?,?,?,?)").run(now(), null, "reprise", lot);
+    db.prepare("INSERT INTO journal VALUES (?,?,?,?)").run(now(), null, "sans_tgc", `${devis} devis, ${brouillons} brouillon(s) de facture ; factures émises avec TGC : ${emises.join(", ") || "aucune"}`);
+  })();
+  console.log(`TGC retirée : ${devis} devis, ${brouillons} brouillon(s) ; factures émises avec TGC (non modifiées) : ${emises.join(", ") || "aucune"}`);
+})();
+
 // ---------------------------------------------------------------- Renumérotation ponctuelle : dernier devis du client DINET
 (function renumeroterDevisDinet() {
   const lot = "devis-dinet-2026-11-18";

@@ -70,6 +70,9 @@ function totals(doc) {
   const tgc = Math.round(hon * taux / 100);
   return { hon: Math.round(hon), deb: Math.round(deb), taux, tgc, ttc: Math.round(hon) + tgc + Math.round(deb) };
 }
+// TGC : le cabinet n'y est pas assujetti (taux 0 dans Paramètres) → aucune mention HT/TTC ni ligne de TGC.
+const TGC_ON = () => num(S().tgc) > 0;
+const HTL = on => (on === undefined ? TGC_ON() : on) ? " HT" : "";
 const paid = f => (f.paiements || []).reduce((a, p) => a + num(p.montant), 0);
 function factState(f) {
   if (f.statut !== "emise") return ["Brouillon", ""];
@@ -372,7 +375,7 @@ function editDossier(id, clientId) {
       <div class="f"><label>Montant de la convention (F)</label><input name="conventionMontant" inputmode="numeric" value="${esc(d.conventionMontant)}"></div>
       <div class="f"><label>Convention signée le</label><input name="conventionDate" type="date" value="${esc(d.conventionDate)}"></div>
       <div class="f"><label>Aide juridictionnelle</label><select name="aj">${listOpts(["", "AJ", "AJMP", "AJP"], d.aj)}</select></div>
-      <div class="f"><label>Taux horaire HT (F)</label><input name="taux" inputmode="numeric" value="${esc(d.taux || s.tauxHoraire || "")}"></div>
+      <div class="f"><label>Taux horaire${HTL()} (F)</label><input name="taux" inputmode="numeric" value="${esc(d.taux || s.tauxHoraire || "")}"></div>
       <div class="f s6"><label>Résumé de l'affaire</label><textarea name="resume">${esc(d.resume)}</textarea></div>
     </div>
     <div class="actions">${id ? `<button class="btn danger" id="del">Supprimer</button>` : ""}<div class="sp"></div><button class="btn ghost" id="cancel">Annuler</button><button class="btn pri" id="ok">Enregistrer</button></div>`, (m, close) => {
@@ -414,7 +417,7 @@ function vDossier(el, id) {
     </dl>${d.resume ? `<p style="white-space:pre-wrap;margin:14px 0 0">${esc(d.resume)}</p>` : ""}</div>
     <div class="card"><div class="head" style="margin-bottom:8px"><h2 style="margin:0">Honoraires et règlements</h2><div class="sp"></div><button class="btn sm pri" id="ar">+ Règlement reçu</button></div>
       <dl class="kv">
-        <dt>Mode</dt><dd>${esc(HON[d.honoraires] || "—")}${d.aj ? ` – ${esc(d.aj)}` : ""}${d.taux && d.honoraires === "horaire" ? ` – ${money(num(d.taux))} HT / h` : ""}</dd>
+        <dt>Mode</dt><dd>${esc(HON[d.honoraires] || "—")}${d.aj ? ` – ${esc(d.aj)}` : ""}${d.taux && d.honoraires === "horaire" ? ` – ${money(num(d.taux))}${HTL()} / h` : ""}</dd>
         <dt>Convention</dt><dd>${num(d.conventionMontant) ? money(num(d.conventionMontant)) : "—"}${d.conventionDate ? ` <span class="small muted">signée le ${fdate(d.conventionDate)}</span>` : d.conventionNote ? ` <span class="small muted">${esc(d.conventionNote)}</span>` : ""}</dd>
         <dt>Payé à ce jour</dt><dd><b>${money(dosRegle(d))}</b></dd>
         ${num(d.conventionMontant) ? `<dt>Solde dû</dt><dd class="${dosSolde(d) ? "late" : ""}"><b>${money(dosSolde(d))}</b>${dosSolde(d) ? "" : ' <span class="tag ok">Soldé</span>'}</dd>` : ""}
@@ -497,7 +500,7 @@ function vDevis(el) {
   const list = D.devis.slice().sort(byDesc("num"));
   el.innerHTML = `
   <div class="head"><h1>Devis</h1><div class="sp"></div><button class="btn pri" onclick="go('devis/new')">+ Nouveau devis</button></div>
-  <div class="card" style="padding:6px 8px">${list.length ? `<table><tr><th>N°</th><th>Date</th><th>Client</th><th>Objet</th><th class="num">Total TTC</th><th>Statut</th></tr>
+  <div class="card" style="padding:6px 8px">${list.length ? `<table><tr><th>N°</th><th>Date</th><th>Client</th><th>Objet</th><th class="num">Total</th><th>Statut</th></tr>
     ${list.map(x => `<tr class="click" onclick="go('devis/${x.id}')"><td>${esc(x.num)}</td><td>${fdate(x.date)}</td><td>${esc(clientName(client(x.clientId)))}</td><td>${esc(x.objet)}</td><td class="num">${money(totals(x).ttc)}</td><td>${tag(ST_DEV, x.statut)}${x.factureId ? ' <span class="tag ok">Facturé</span>' : ""}</td></tr>`).join("")}</table>` : `<div class="empty">Aucun devis</div>`}</div>`;
 }
 function vFactures(el) {
@@ -507,16 +510,16 @@ function vFactures(el) {
   el.innerHTML = `
   <div class="head"><h1>Factures</h1><div class="sp"></div><button class="btn pri" onclick="go('facture/new')">+ Nouvelle facture</button></div>
   <div class="filters"><div class="chips">${Object.entries(F).map(([k, v]) => `<button class="chip ${k === factFilter ? "on" : ""}" data-f="${k}">${v[0]} (${D.factures.filter(v[1]).length})</button>`).join("")}</div></div>
-  <div class="card" style="padding:6px 8px">${list.length ? `<table><tr><th>N°</th><th>Date</th><th>Client</th><th>Dossier</th><th class="num">Total TTC</th><th class="num">Reste dû</th><th>Échéance</th><th>État</th></tr>
+  <div class="card" style="padding:6px 8px">${list.length ? `<table><tr><th>N°</th><th>Date</th><th>Client</th><th>Dossier</th><th class="num">Total</th><th class="num">Reste dû</th><th>Échéance</th><th>État</th></tr>
     ${list.map(f => { const st = factState(f); return `<tr class="click" onclick="go('facture/${f.id}')"><td>${esc(f.num || "—")}</td><td>${fdate(f.date)}</td><td>${esc(clientName(client(f.clientId)))}</td><td class="small">${esc(dossier(f.dossierId) ? dossier(f.dossierId).num : "")}</td>
-      <td class="num">${money(totals(f).ttc)}</td><td class="num">${reste(f) ? money(reste(f)) : "—"}</td><td>${fdate(f.echeance)}</td><td><span class="tag ${st[1]}">${st[0]}</span></td></tr>`; }).join("")}
+      <td class="num">${money(totals(f).ttc)}</td><td class="num">${reste(f) ? money(reste(f)) : "—"}</td><td>${fdate(f.echeance)}</td><td><span class="tag ${st[1]}">${st[0]}</span>${!TGC_ON() && f.statut === "emise" && !f.avoir && num(f.tgc) > 0 ? ' <span class="tag bad" title="Émise avant le retrait de la TGC : établir un avoir puis refaire la facture">Avec TGC</span>' : ""}</td></tr>`; }).join("")}
     <tr><td colspan="4" class="muted">Total (factures émises)</td><td class="num"><b>${money(sum(f => totals(f).ttc))}</b></td><td class="num"><b>${money(sum(reste))}</b></td><td colspan="2"></td></tr></table>` : `<div class="empty">Aucune facture</div>`}</div>`;
   $$(".chip", el).forEach(b => b.onclick = () => { factFilter = b.dataset.f; vFactures(el); });
 }
 
 // ============================================================ Éditeur commun devis / facture
 function linesEditor(doc, locked) {
-  return `<table class="lines"><tr><th class="ty">Nature</th><th>Désignation</th><th class="q num">Qté / h</th><th class="pu num">P.U. HT (F)</th><th class="num">Montant HT</th><th></th></tr>
+  return `<table class="lines"><tr><th class="ty">Nature</th><th>Désignation</th><th class="q num">Qté / h</th><th class="pu num">P.U.${HTL(totals(doc).taux > 0)} (F)</th><th class="num">Montant${HTL(totals(doc).taux > 0)}</th><th></th></tr>
   ${(doc.lignes || []).map((l, i) => `<tr>
     <td><select data-l="${i}" data-k="type" ${locked ? "disabled" : ""}><option value="hon" ${l.type !== "deb" ? "selected" : ""}>Honoraires</option><option value="deb" ${l.type === "deb" ? "selected" : ""}>Débours / frais</option></select></td>
     <td><input data-l="${i}" data-k="desc" value="${esc(l.desc)}" ${locked ? "disabled" : ""}></td>
@@ -529,8 +532,10 @@ function linesEditor(doc, locked) {
 }
 function totalsHtml(doc) {
   const t = totals(doc), p = doc.paiements ? paid(doc) : 0, imp = num(doc.impute);
-  return `<div><span>Honoraires HT</span><span>${money(t.hon)}</span></div><div><span>TGC ${String(t.taux).replace(".", ",")} %</span><span>${money(t.tgc)}</span></div>
-    ${t.deb ? `<div><span>Débours (non soumis)</span><span>${money(t.deb)}</span></div>` : ""}<div class="big"><span>Total TTC</span><span>${money(t.ttc)}</span></div>
+  const on = t.taux > 0;
+  return `<div><span>Honoraires${on ? " HT" : ""}</span><span>${money(t.hon)}</span></div>${on ? `<div><span>TGC ${String(t.taux).replace(".", ",")} %</span><span>${money(t.tgc)}</span></div>` : ""}
+    ${t.deb ? `<div><span>Débours${on ? " (non soumis)" : ""}</span><span>${money(t.deb)}</span></div>` : ""}<div class="big"><span>Total${on ? " TTC" : ""}</span><span>${money(t.ttc)}</span></div>
+    ${on ? "" : `<div class="small muted" style="justify-content:flex-end">TGC non applicable – cabinet non assujetti</div>`}
     ${doc.paiements && !doc.avoir && imp ? `<div><span>Moins acomptes versés</span><span>- ${money(imp)}</span></div>` : ""}
     ${doc.paiements && doc.statut === "emise" && !doc.avoir && p ? `<div><span>Règlements reçus</span><span>- ${money(p)}</span></div>` : ""}
     ${doc.paiements && !doc.avoir && (imp || (doc.statut === "emise" && p)) ? `<div class="big"><span>Solde net à payer</span><span>${money(Math.max(0, t.ttc - imp - (doc.statut === "emise" ? p : 0)))}</span></div>` : ""}`;
@@ -568,7 +573,7 @@ function vDevisEdit(el, rawId) {
       <div class="f s3"><label>Dossier</label><select name="dossierId">${dosOpts}</select></div>
       <div class="f s4"><label>Objet</label><input name="objet" value="${esc(doc.objet)}"></div>
       <div class="f"><label>Statut</label><select name="statut">${opts(ST_DEV, doc.statut)}</select></div>
-      <div class="f s1"><label>TGC %</label><input name="tgc" value="${esc(doc.tgc)}"></div>
+      ${TGC_ON() || num(doc.tgc) ? `<div class="f s1"><label>TGC %</label><input name="tgc" value="${esc(doc.tgc)}"></div>` : ""}
       <div class="f"><label>Date</label><input name="date" type="date" value="${esc(doc.date)}"></div>
       <div class="f"><label>Valable jusqu'au</label><input name="validite" type="date" value="${esc(doc.validite)}"></div>
     </div>
@@ -578,7 +583,7 @@ function vDevisEdit(el, rawId) {
   </div>`;
   const rer = () => vDevisEdit(el, rawId);
   $$(".form [name]", el).forEach(i => i.addEventListener("change", () => { doc[i.name] = i.value; if (i.name === "clientId") { doc.dossierId = ""; rer(); } if (i.name === "tgc") $("#tot", el).innerHTML = totalsHtml(doc); }));
-  $("[name=tgc]", el).addEventListener("input", e => { doc.tgc = e.target.value; $("#tot", el).innerHTML = totalsHtml(doc); });
+  if ($("[name=tgc]", el)) $("[name=tgc]", el).addEventListener("input", e => { doc.tgc = e.target.value; $("#tot", el).innerHTML = totalsHtml(doc); });
   bindLines(el, doc, locked, rer);
   const doSave = async () => { $$(".form [name]", el).forEach(i => doc[i.name] = i.value); if (!doc.clientId) { alert("Choisissez un client."); return null; } const o = Object.assign({}, doc); delete o._new; delete o._key; try { const s = await save("devis", o); curDoc = Object.assign(JSON.parse(JSON.stringify(s)), { _key: "devis:" + s.id }); return s; } catch (e) { fail(e); return null; } };
   $("#sv").onclick = async () => { const s = await doSave(); if (s) { toast("Devis " + s.num + " enregistré"); if (rawId.startsWith("new")) go("devis/" + s.id); else rer(); } };
@@ -615,7 +620,7 @@ function vFactureEdit(el, rawId) {
       <div class="f s3"><label>Client *</label><select name="clientId" ${locked ? "disabled" : ""}>${clientOpts(doc.clientId)}</select></div>
       <div class="f s3"><label>Dossier</label><select name="dossierId" ${locked ? "disabled" : ""}>${dosOpts}</select></div>
       <div class="f s4"><label>Objet</label><input name="objet" value="${esc(doc.objet)}" ${locked ? "disabled" : ""}></div>
-      <div class="f s1"><label>TGC %</label><input name="tgc" value="${esc(doc.tgc)}" ${locked ? "disabled" : ""}></div>
+      ${TGC_ON() || num(doc.tgc) ? `<div class="f s1"><label>TGC %</label><input name="tgc" value="${esc(doc.tgc)}" ${locked ? "disabled" : ""}></div>` : ""}
       <div class="f s1"><label>Date</label><input name="date" type="date" value="${esc(doc.date)}" ${locked ? "disabled" : ""}></div>
       <div class="f"><label>Échéance de paiement</label><input name="echeance" type="date" value="${esc(doc.echeance)}"></div>
       ${doc.avoir ? "" : `<div class="f"><label>Acomptes déjà versés à déduire (F)</label><input name="impute" inputmode="numeric" value="${esc(doc.impute)}" ${locked ? "disabled" : ""}></div>
@@ -628,7 +633,7 @@ function vFactureEdit(el, rawId) {
   <div class="actions">${!locked && !doc._new ? `<button class="btn danger" id="del">Supprimer le brouillon</button>` : ""}<div class="sp"></div></div>`;
   const rer = () => vFactureEdit(el, rawId);
   $$(".form [name]", el).forEach(i => i.addEventListener("change", () => { doc[i.name] = i.value; if (i.name === "clientId") { doc.dossierId = ""; rer(); } if (i.name === "tgc") $("#tot", el).innerHTML = totalsHtml(doc); if (locked && i.name === "echeance") persist().then(s => s && toast("Échéance modifiée")); }));
-  $("[name=tgc]", el).addEventListener("input", e => { doc.tgc = e.target.value; $("#tot", el).innerHTML = totalsHtml(doc); });
+  if ($("[name=tgc]", el)) $("[name=tgc]", el).addEventListener("input", e => { doc.tgc = e.target.value; $("#tot", el).innerHTML = totalsHtml(doc); });
   if ($("[name=impute]", el)) $("[name=impute]", el).addEventListener("input", e => { doc.impute = e.target.value; $("#tot", el).innerHTML = totalsHtml(doc); });
   if ($("#useimp", el)) $("#useimp", el).onclick = () => { doc.impute = Math.min(acomptesDispo(doc.dossierId, doc.id), totals(doc).ttc); rer(); };
   bindLines(el, doc, locked, rer);
@@ -749,7 +754,7 @@ function pdfDoc(doc, kind) {
   const b1 = block(M, kind === "devis" ? "DOSSIER & MODE D'HONORAIRES" : "DOSSIER & MODE DE FACTURATION", [
     ["Objet / Affaire", objet + (dos && dos.adverse ? " c/ " + dos.adverse : "")],
     ["Juridiction / Domaine", dos ? [dos.juridiction, dos.rg ? "RG " + dos.rg : "", dos.domaine].filter(Boolean).join(" – ") || "Conseil" : "—"],
-    ["Facturation", dos ? (HON[dos.honoraires] || "Forfait") + (dos.honoraires === "horaire" && num(dos.taux) ? " (" + grp(num(dos.taux)) + " XPF HT/h)" : "") + (dos.aj ? " – " + dos.aj : "") : "Forfait"]]);
+    ["Facturation", dos ? (HON[dos.honoraires] || "Forfait") + (dos.honoraires === "horaire" && num(dos.taux) ? " (" + grp(num(dos.taux)) + " XPF" + HTL(t.taux > 0) + "/h)" : "") + (dos.aj ? " – " + dos.aj : "") : "Forfait"]]);
   const b2 = block(bx2, isFact ? "FACTURÉ À (CLIENT)" : "DESTINATAIRE (CLIENT)", [
     ["Nom / Raison sociale", clientName(c) + (c.type === "societe" && c.nom ? "\nReprésentée par " + [c.civilite, c.prenom, c.nom].filter(Boolean).join(" ") : "")],
     c.ridet ? ["N° RIDET", c.ridet] : null, ["Adresse", c.adresse], ["Téléphone", c.tel], ["Email", c.email]].filter(Boolean));
@@ -759,7 +764,7 @@ function pdfDoc(doc, kind) {
   font("bold", 9.5, INK); txt("DÉSIGNATION DES PRESTATIONS" + (t.deb ? " ET DÉBOURS" : ""), M, y); y += 2.5;
   const cols = { d: M + 2, q: 128, pu: 155, m: R - 2 };
   const thead = () => { pdf.setFillColor(...INK); pdf.rect(M, y, R - M, 7.5, "F"); font("bold", 8.3, [255, 255, 255]);
-    txt("Description des diligences et frais", cols.d, y + 5); txt("Qté / h", cols.q, y + 5, { align: "right" }); txt("P.U. HT", cols.pu, y + 5, { align: "right" }); txt("Montant HT", cols.m, y + 5, { align: "right" }); y += 7.5; };
+    txt("Description des diligences et frais", cols.d, y + 5); txt("Qté / h", cols.q, y + 5, { align: "right" }); txt("P.U." + HTL(t.taux > 0), cols.pu, y + 5, { align: "right" }); txt("Montant" + HTL(t.taux > 0), cols.m, y + 5, { align: "right" }); y += 7.5; };
   thead();
   const rows = (doc.lignes || []).filter(l => l.desc || num(l.pu));
   const section = (label, list) => {
@@ -778,17 +783,19 @@ function pdfDoc(doc, kind) {
     });
   };
   section("Honoraires", rows.filter(l => l.type !== "deb"));
-  section("Frais externes et débours refacturés au réel (exonérés de TGC*)", rows.filter(l => l.type === "deb"));
+  section(t.taux > 0 ? "Frais externes et débours refacturés au réel (exonérés de TGC*)" : "Frais externes et débours refacturés au réel*", rows.filter(l => l.type === "deb"));
 
   // ---- Récapitulatif
   y += 6; ensure(52);
   const verse = isFact && !doc.avoir ? num(doc.impute) + paid(doc) : 0, net = Math.max(0, t.ttc - verse);
   const kx = 118; let ky = y;
   const krow = (k, v, bold, col) => { font(bold ? "bold" : "normal", bold ? 9.5 : 8.8, col || (bold ? INK : GREY)); txt(k, kx, ky); font(bold ? "bold" : "normal", bold ? 9.5 : 8.8, col || INK); txt(v, R - 2, ky, { align: "right" }); ky += 5.4; };
-  krow("Total honoraires HT", F(t.hon));
-  krow("TGC " + String(t.taux).replace(".", ",") + " %", F(t.tgc));
-  if (t.deb) krow("Débours (exonérés de TGC)", F(t.deb));
-  pdf.setFillColor(...SOFT); pdf.rect(kx - 3, ky - 4.2, R - kx + 3, 7.2, "F"); krow(doc.avoir ? "TOTAL AVOIR TTC" : "TOTAL TTC", F(t.ttc), true);
+  const tOn = t.taux > 0;
+  krow("Total honoraires" + (tOn ? " HT" : ""), F(t.hon));
+  if (tOn) krow("TGC " + String(t.taux).replace(".", ",") + " %", F(t.tgc));
+  if (t.deb) krow(tOn ? "Débours (exonérés de TGC)" : "Débours", F(t.deb));
+  pdf.setFillColor(...SOFT); pdf.rect(kx - 3, ky - 4.2, R - kx + 3, 7.2, "F"); krow((doc.avoir ? "TOTAL AVOIR" : "TOTAL") + (tOn ? " TTC" : ""), F(t.ttc), true);
+  if (!tOn) { font("italic", 7.5, GREY); txt("TGC non applicable – cabinet non assujetti", R - 2, ky - 1.5, { align: "right" }); ky += 3.5; }
   if (verse) {
     krow("Moins acomptes versés", "- " + F(verse));
     pdf.setFillColor(...LOGO_RED); pdf.rect(kx - 3, ky - 4.4, R - kx + 3, 7.6, "F"); krow("SOLDE NET À PAYER", F(net), true, [255, 255, 255]);
@@ -799,7 +806,7 @@ function pdfDoc(doc, kind) {
   pdf.setDrawColor(...GOLD); pdf.setLineWidth(0.4); pdf.rect(M, y - 4.5, kx - M - 8, sl.length * 4.3 + 5);
   font("italic", 8.8, INK); txt(sl, M + 3, y);
   let ly2 = y + sl.length * 4.3 + 5;
-  if (t.deb) { font("normal", 7.2, GREY); const n = pdf.splitTextToSize("* Débours exposés au nom et pour le compte du client, refacturés au franc le franc hors TGC sur présentation des justificatifs.", kx - M - 8); txt(n, M, ly2); ly2 += n.length * 3.2; }
+  if (t.deb) { font("normal", 7.2, GREY); const n = pdf.splitTextToSize("* Débours exposés au nom et pour le compte du client, refacturés au franc le franc sur présentation des justificatifs.", kx - M - 8); txt(n, M, ly2); ly2 += n.length * 3.2; }
   y = Math.max(ky, ly2) + 5;
 
   // ---- Versements reçus (facture)
@@ -864,8 +871,8 @@ function conventionDialog(dosId) {
       <div class="sec">Article 3 – Honoraires</div>
       <div class="f"><label>Mode</label><select name="mode">${opts(HON, d.honoraires || "forfait")}</select></div>
       <div class="f"><label>Montant du forfait (F)</label><input name="montant" inputmode="numeric" value="${esc(d.conventionMontant)}"></div>
-      <div class="f"><label>Montant exprimé</label><select name="base"><option value="HT">HT – TGC en sus</option><option value="TTC">TTC – taxes comprises</option></select></div>
-      <div class="f"><label>Taux horaire HT (F)</label><input name="taux" inputmode="numeric" value="${esc(d.taux || s.tauxHoraire || 25000)}"></div>
+      ${TGC_ON() ? `<div class="f"><label>Montant exprimé</label><select name="base"><option value="HT">HT – TGC en sus</option><option value="TTC">TTC – taxes comprises</option></select></div>` : `<input type="hidden" name="base" value="NET">`}
+      <div class="f"><label>Taux horaire${HTL()} (F)</label><input name="taux" inputmode="numeric" value="${esc(d.taux || s.tauxHoraire || 25000)}"></div>
       <div class="f"><label>Plafond des honoraires (F, facultatif)</label><input name="plafond" inputmode="numeric"></div>
       <div class="f"><label>Honoraire de résultat (%)</label><input name="resultat" inputmode="decimal"></div>
       <div class="f"><label>Provision à la signature (F)</label><input name="provision" inputmode="numeric"></div>
@@ -883,7 +890,7 @@ function conventionDialog(dosId) {
       const mode = $("[name=mode]", m).value, per = $("[name=duree]", m).value === "periode";
       $$(".per", m).forEach(x => x.style.display = per ? "" : "none");
       const show = (n, on) => { $(`[name=${n}]`, m).closest(".f").style.display = on ? "" : "none"; };
-      show("montant", ["forfait", "resultat"].includes(mode)); show("base", ["forfait", "resultat"].includes(mode));
+      show("montant", ["forfait", "resultat"].includes(mode)); if (TGC_ON()) show("base", ["forfait", "resultat"].includes(mode));
       show("taux", mode === "horaire"); show("plafond", mode === "horaire"); show("resultat", mode === "resultat");
     };
     $("[name=mode]", m).onchange = sync; $("[name=duree]", m).onchange = sync; sync();
@@ -897,7 +904,7 @@ function conventionDialog(dosId) {
         const o = JSON.parse(JSON.stringify(d)); o.honoraires = f.mode;
         if (["forfait", "resultat"].includes(f.mode) && num(f.montant)) o.conventionMontant = num(f.montant);
         if (f.mode === "horaire" && num(f.taux)) o.taux = num(f.taux);
-        const note = "Convention d'honoraires générée (" + (HON[f.mode] || f.mode) + (num(f.montant) && f.mode !== "horaire" ? ", " + money(num(f.montant)) + " " + f.base : "") + ").";
+        const note = "Convention d'honoraires générée (" + (HON[f.mode] || f.mode) + (num(f.montant) && f.mode !== "horaire" ? ", " + money(num(f.montant)) + (f.base === "NET" ? "" : " " + f.base) : "") + ").";
         o.journal = o.journal || [];
         if (!o.journal.some(j => j.date === today() && j.texte === note)) o.journal.push({ id: uid(), date: today(), texte: note, by: ME.id });
         try { await save("dossiers", o); } catch (e) { fail(e); }
@@ -970,19 +977,25 @@ async function conventionDocx(d, c, f) {
   }
 
   children.push(article(n++, "Honoraires et frais"));
-  const tgc = String(num(s.tgc)).replace(".", ",");
+  const tgc = String(num(s.tgc)).replace(".", ","), on = num(s.tgc) > 0;
+  const ht = on ? " hors taxes" : "", taxes = on ? `, augmenté des taxes en vigueur (TGC ${tgc} %)` : "";
   if (f.mode === "horaire") {
-    children.push(just(`Les prestations sont facturées sur la base d'un taux horaire de ${fmtF(f.taux)} hors taxes, augmenté des taxes en vigueur (TGC ${tgc} %).`));
-    if (num(f.plafond)) children.push(bullet(`Le montant total des honoraires ne pourra excéder ${fmtF(f.plafond)} hors taxes.`));
+    children.push(just(`Les prestations sont facturées sur la base d'un taux horaire de ${fmtF(f.taux)}${ht}${taxes}.`));
+    if (num(f.plafond)) children.push(bullet(`Le montant total des honoraires ne pourra excéder ${fmtF(f.plafond)}${ht}.`));
   } else if (f.mode === "aj") {
     children.push(just(`La mission est réalisée au titre de l'aide juridictionnelle${d.aj ? " (" + d.aj + ")" : ""}. Si celle-ci n'est que partielle ou venait à être retirée, les honoraires restant à la charge du Client seront fixés d'un commun accord par avenant à la présente convention.`));
   } else if (f.mode === "assurance") {
-    children.push(just("Les honoraires sont pris en charge par l'assureur de protection juridique du Client, dans la limite des plafonds prévus à son contrat. Les honoraires excédant cette prise en charge restent dus par le Client, sur la base d'un taux horaire de " + fmtF(f.taux) + " hors taxes, augmenté des taxes en vigueur (TGC " + tgc + " %)."));
+    children.push(just(`Les honoraires sont pris en charge par l'assureur de protection juridique du Client, dans la limite des plafonds prévus à son contrat. Les honoraires excédant cette prise en charge restent dus par le Client, sur la base d'un taux horaire de ${fmtF(f.taux)}${ht}${taxes}.`));
   } else {
     const mt = num(f.montant);
-    children.push(just(mt ? (f.base === "TTC" ? `Les honoraires sont fixés forfaitairement à la somme de ${fmtF(mt)} toutes taxes comprises.` : `Les honoraires sont fixés forfaitairement à la somme de ${fmtF(mt)} hors taxes, augmentée de la TGC au taux en vigueur (${tgc} %), soit ${fmtF(Math.round(mt * (1 + num(s.tgc) / 100)))} TTC.`) : "Les honoraires sont fixés forfaitairement à la somme de ____________ F CFP hors taxes, augmentée des taxes en vigueur."));
-    if (f.mode === "resultat") children.push(just(`Il s'y ajoute un honoraire complémentaire de résultat égal à ${String(num(f.resultat) || "___").replace(".", ",")} % hors taxes des sommes obtenues ou économisées par le Client, exigible à l'issue définitive de la procédure.`));
+    const phrase = !mt ? `Les honoraires sont fixés forfaitairement à la somme de ____________ F CFP${ht}${on ? ", augmentée des taxes en vigueur" : ""}.`
+      : !on ? `Les honoraires sont fixés forfaitairement à la somme de ${fmtF(mt)}.`
+      : f.base === "TTC" ? `Les honoraires sont fixés forfaitairement à la somme de ${fmtF(mt)} toutes taxes comprises.`
+      : `Les honoraires sont fixés forfaitairement à la somme de ${fmtF(mt)} hors taxes, augmentée de la TGC au taux en vigueur (${tgc} %), soit ${fmtF(Math.round(mt * (1 + num(s.tgc) / 100)))} TTC.`;
+    children.push(just(phrase));
+    if (f.mode === "resultat") children.push(just(`Il s'y ajoute un honoraire complémentaire de résultat égal à ${String(num(f.resultat) || "___").replace(".", ",")} %${ht} des sommes obtenues ou économisées par le Client, exigible à l'issue définitive de la procédure.`));
   }
+  if (!on) children.push(just("Le Cabinet n'étant pas assujetti à la TGC, les montants ci-dessus s'entendent nets de taxe."));
   if (num(f.provision)) children.push(just(`Une provision de ${fmtF(f.provision)} est versée à la signature de la présente convention ; elle s'impute sur les honoraires dus.`));
   children.push(just("Les frais de déplacement, timbres de plaidoirie et débours divers (courriers recommandés, copies, frais d'huissier, droits de greffe, etc.) sont facturés en sus, sur présentation de justificatifs."));
   children.push(just("Un devis pourra être établi à la demande du Client pour toute mission complémentaire déterminée."));
@@ -1145,8 +1158,8 @@ function vParametres(el) {
       <div class="f s3"><label>Logo</label><input type="file" id="logo" accept="image/png,image/jpeg"></div>
       <div class="f s3"><label>&nbsp;</label><div>${s.logo ? `<img src="${s.logo}" style="max-height:48px;vertical-align:middle"> <button class="btn sm ghost" id="rmlogo">Retirer</button>` : '<span class="muted small">Aucun logo</span>'}</div></div>
       <div class="sec">Facturation</div>
-      <div class="f s1"><label>TGC (%)</label><input name="tgc" value="${esc(s.tgc)}"></div>
-      <div class="f"><label>Taux horaire HT par défaut (F)</label><input name="tauxHoraire" value="${esc(s.tauxHoraire)}"></div>
+      <div class="f"><label>TGC (%) – 0 si non assujetti</label><input name="tgc" value="${esc(s.tgc)}"></div>
+      <div class="f"><label>Taux horaire par défaut (F)</label><input name="tauxHoraire" value="${esc(s.tauxHoraire)}"></div>
       <div class="f"><label>Délai de paiement (jours)</label><input name="delai" value="${esc(s.delai)}"></div>
       <div class="f s1"><label>Validité devis (j)</label><input name="validite" value="${esc(s.validite)}"></div>
       <div class="f s6"><label>Domaines d'intervention (un par ligne)</label><textarea name="domaines" style="min-height:140px">${esc(s.domaines.join("\n"))}</textarea></div>
