@@ -370,6 +370,40 @@ app.use(express.static(path.join(__dirname, "public"), { index: false, setHeader
   console.log(`TGC retirée : ${devis} devis, ${brouillons} brouillon(s) ; factures émises avec TGC (non modifiées) : ${emises.join(", ") || "aucune"}`);
 })();
 
+// ---------------------------------------------------------------- Suppression ponctuelle : facture d'essai du client CHENU
+// Dernière facture émise au nom de CHENU (essai), avec sa copie archivée et les avoirs liés ; devis et temps remis à « non facturé ».
+(function supprimerFactureEssaiChenu() {
+  const lot = "facture-essai-chenu-2026-11-26";
+  if (db.prepare("SELECT 1 FROM journal WHERE action = 'reprise' AND detail = ?").get(lot)) return;
+  const norm = v => String(v || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
+  const clients = db.prepare("SELECT id, data FROM docs WHERE collection = 'clients'").all()
+    .filter(r => { const c = JSON.parse(r.data); return c.type !== "societe" && norm(c.nom).includes("CHENU"); }).map(r => r.id);
+  const all = col => db.prepare("SELECT id, num, data FROM docs WHERE collection = ?").all(col).map(r => Object.assign(JSON.parse(r.data), { id: r.id, num: r.num }));
+  const f = all("factures").filter(x => clients.includes(x.clientId) && x.statut === "emise" && !x.avoir)
+    .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))[0];
+  if (!f) { console.log("Facture d'essai CHENU : aucune facture émise trouvée (nouvel essai au prochain démarrage)"); return; }
+  db.transaction(() => {
+    const avoirs = all("factures").filter(x => x.avoirDe === f.id);
+    const ids = [f.id].concat(avoirs.map(a => a.id));
+    ids.forEach(id => db.prepare("DELETE FROM docs WHERE collection = 'factures' AND id = ?").run(id));
+    all("documents").filter(d => ids.includes(d.refId)).forEach(d => {
+      db.prepare("DELETE FROM docs WHERE collection = 'documents' AND id = ?").run(d.id);
+      if (d.fileId) { db.prepare("DELETE FROM files WHERE id = ?").run(d.fileId); fs.rmSync(path.join(FILES_DIR, d.fileId), { force: true }); }
+    });
+    all("devis").filter(d => ids.includes(d.factureId)).forEach(d => {
+      const b = Object.assign({}, d); delete b.id; b.factureId = "";
+      db.prepare("UPDATE docs SET data = ? WHERE collection = 'devis' AND id = ?").run(JSON.stringify(b), d.id);
+    });
+    all("dossiers").filter(d => (d.temps || []).some(t => ids.includes(t.factureId))).forEach(d => {
+      const b = Object.assign({}, d); delete b.id; b.temps.forEach(t => { if (ids.includes(t.factureId)) delete t.factureId; });
+      db.prepare("UPDATE docs SET data = ? WHERE collection = 'dossiers' AND id = ?").run(JSON.stringify(b), d.id);
+    });
+    db.prepare("INSERT INTO journal VALUES (?,?,?,?)").run(now(), null, "reprise", lot);
+    db.prepare("INSERT INTO journal VALUES (?,?,?,?)").run(now(), null, "suppression_facture_essai", (f.num || f.id) + (avoirs.length ? " + " + avoirs.length + " avoir(s)" : ""));
+  })();
+  console.log("Facture d'essai CHENU supprimée : " + f.num);
+})();
+
 // ---------------------------------------------------------------- Renumérotation ponctuelle : dernier devis du client DINET
 (function renumeroterDevisDinet() {
   const lot = "devis-dinet-2026-11-18";
