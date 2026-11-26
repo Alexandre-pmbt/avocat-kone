@@ -340,6 +340,20 @@ function vDossiers(el) {
   $$(".chip", el).forEach(b => b.onclick = () => { dosFilter = b.dataset.f; vDossiers(el); });
   const inp = $("#oq", el); inp.oninput = () => { dosQ = inp.value; vDossiers(el); const n = $("#oq", el); n.focus(); n.setSelectionRange(n.value.length, n.value.length); };
 }
+// Situation du dossier : liste de base + situations déjà utilisées dans les dossiers, et « Autre… » pour en saisir une nouvelle.
+const ETAPES = ["Consultation", "Convention", "En cours", "Mise en état", "1ère instance", "Jugé en première instance", "Appel", "Attente appel CA", "Divorce JAP", "Médiation / conciliation", "Liquidation", "Exécution", "Prise en charge par l'assurance", "Terminé"];
+function etapeSelect(cur, attrs) {
+  const all = ETAPES.concat(D.dossiers.map(x => x.etape).filter(Boolean).filter(x => !ETAPES.includes(x)).sort());
+  if (cur && !all.includes(cur)) all.push(cur);
+  return `<select ${attrs}><option value="">— Choisir la situation —</option>${[...new Set(all)].map(x => `<option ${x === cur ? "selected" : ""}>${esc(x)}</option>`).join("")}<option value="__autre">Autre…</option></select>`;
+}
+// « Autre… » : demande le libellé, l'ajoute à la liste et le sélectionne. Renvoie la valeur retenue (ou l'ancienne si annulé).
+function etapeAutre(sel, prev) {
+  if (sel.value !== "__autre") return sel.value;
+  const v = (prompt("Nouvelle situation du dossier :") || "").trim();
+  if (!v) { sel.value = prev || ""; return prev || ""; }
+  const o = document.createElement("option"); o.textContent = v; sel.insertBefore(o, sel.lastElementChild); sel.value = v; return v;
+}
 const HON = { forfait: "Forfait", horaire: "Au temps passé", resultat: "Forfait + honoraire de résultat", aj: "Aide juridictionnelle", assurance: "Protection juridique (assurance)" };
 // Honoraires d'un dossier : convention, règlements reçus (acomptes hors facture + règlements de ses factures), solde.
 const dosRegle = d => (d.reglements || []).reduce((a, r) => a + num(r.montant), 0) + D.factures.filter(f => f.dossierId === d.id && !f.avoir).reduce((a, f) => a + paid(f), 0);
@@ -360,7 +374,7 @@ function editDossier(id, clientId) {
       <div class="f s1"><label>N° dossier</label><input name="num" value="${esc(d.num)}" placeholder="${id ? "" : "Auto"}"></div>
       <div class="f s3"><label>Intitulé *</label><input name="intitule" value="${esc(d.intitule)}" placeholder="Ex. : Divorce DUPONT / MARTIN"></div>
       <div class="f"><label>Statut</label><select name="statut">${opts(ST_DOS, d.statut)}</select></div>
-      <div class="f s6"><label>Situation du dossier</label><input name="etape" list="etl" value="${esc(d.etape)}" placeholder="Ex. : 1ère instance, Appel, Mise en état, Attente jugement…"><datalist id="etl">${["Consultation", "Convention", "En cours", "Mise en état", "1ère instance", "Jugé en première instance", "Appel", "Attente appel CA", "Liquidation", "Exécution", "Prise en charge par l'assurance"].map(x => `<option>${x}</option>`).join("")}</datalist></div>
+      <div class="f s6"><label>Situation du dossier</label>${etapeSelect(d.etape, 'name="etape"')}</div>
       <div class="f s4"><label>Client *</label><select name="clientId">${clientOpts(d.clientId)}</select></div>
       <div class="f"><label>&nbsp;</label><button class="btn" type="button" id="nc">+ Nouveau client</button></div>
       <div class="f"><label>Domaine</label><select name="domaine">${listOpts(s.domaines, d.domaine, "—")}</select></div>
@@ -381,6 +395,7 @@ function editDossier(id, clientId) {
     <div class="actions">${id ? `<button class="btn danger" id="del">Supprimer</button>` : ""}<div class="sp"></div><button class="btn ghost" id="cancel">Annuler</button><button class="btn pri" id="ok">Enregistrer</button></div>`, (m, close) => {
     $("#cancel", m).onclick = close;
     $("#nc", m).onclick = () => editClient(null, c => { $("[name=clientId]", m).innerHTML = clientOpts(c.id); });
+    let etPrev = d.etape || ""; $("[name=etape]", m).onchange = e => { etPrev = etapeAutre(e.target, etPrev); };
     $("#ok", m).onclick = async () => {
       const f = readForm(m); if (!f.intitule || !f.clientId) return alert("L'intitulé et le client sont obligatoires.");
       f.conventionMontant = f.conventionMontant ? num(f.conventionMontant) : "";
@@ -417,7 +432,7 @@ function vDossier(el, id) {
       ${d.domaine ? `<dt>Domaine</dt><dd>${esc(d.domaine)}</dd>` : ""}
       ${d.adverse ? `<dt>Partie adverse</dt><dd>${esc(d.adverse)}${d.avocatAdverse ? `<div class="small muted">Conseil : ${esc(d.avocatAdverse)}</div>` : ""}</dd>` : ""}
       ${d.juridiction ? `<dt>Juridiction</dt><dd>${esc(d.juridiction)}${d.rg ? ` – RG ${esc(d.rg)}` : ""}</dd>` : d.rg ? `<dt>Référence</dt><dd>${esc(d.rg)}</dd>` : ""}
-      ${d.etape ? `<dt>Situation</dt><dd><b>${esc(d.etape)}</b></dd>` : ""}
+      <dt>Situation</dt><dd>${etapeSelect(d.etape, 'id="etapeq" style="border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-weight:600;background:#fff;max-width:100%"')}</dd>
       <dt>Premier contact</dt><dd>${d.premierContact ? fdate(d.premierContact) : '<span class="muted">—</span>'}</dd>
       ${d.ouverture ? `<dt>Ouvert le</dt><dd>${fdate(d.ouverture)}</dd>` : ""}
       ${facTot ? `<dt>Facturé / encaissé</dt><dd>${money(facTot)} / ${money(encTot)}</dd>` : ""}
@@ -466,6 +481,11 @@ function vDossier(el, id) {
   dz.addEventListener("drop", e => envoyer(e.dataTransfer.files));
   const upd = async (fn, msg) => { const o = JSON.parse(JSON.stringify(dossier(id))); fn(o); try { await save("dossiers", o); if (msg) toast(msg); render(); } catch (e) { fail(e); } };
   $("#ed").onclick = () => editDossier(id);
+  $("#etapeq").onchange = e => {
+    const avant = d.etape || "", v = etapeAutre(e.target, avant);
+    if (v === avant) return;
+    upd(o => { o.etape = v; (o.journal = o.journal || []).push({ id: uid(), date: today(), texte: "Situation : " + (avant || "—") + " → " + (v || "—"), by: ME.id }); }, "Situation mise à jour");
+  };
   $("#cv").onclick = () => conventionDialog(id);
   $("#nd").onclick = () => go(`devis/new?dossier=${id}`);
   $("#nf").onclick = () => go(`facture/new?dossier=${id}`);
@@ -1248,7 +1268,8 @@ boot();
 (function sansSuggestions() {
   const off = root => $$("input:not([type=password]):not([type=file]):not([type=checkbox]), textarea", root).forEach(i => {
     if (i.closest("#lf")) return;
-    i.setAttribute("autocomplete", "off"); if (i.list === null) i.setAttribute("autocomplete", "off");
+    if (i.hasAttribute("list")) return; // garder les listes proposées par le logiciel (juridictions, libellés d'échéance)
+    i.setAttribute("autocomplete", "off");
   });
   off(document);
   new MutationObserver(ms => ms.forEach(m => m.addedNodes.forEach(n => { if (n.nodeType === 1) off(n.parentNode || n); }))).observe(document.body, { childList: true, subtree: true });
