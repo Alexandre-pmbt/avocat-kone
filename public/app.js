@@ -341,7 +341,7 @@ function vDossiers(el) {
   const inp = $("#oq", el); inp.oninput = () => { dosQ = inp.value; vDossiers(el); const n = $("#oq", el); n.focus(); n.setSelectionRange(n.value.length, n.value.length); };
 }
 // Situation du dossier : liste de base + situations déjà utilisées dans les dossiers, et « Autre… » pour en saisir une nouvelle.
-const ETAPES = ["Consultation", "Convention", "En cours", "Mise en état", "1ère instance", "Jugé en première instance", "Appel", "Attente appel CA", "Divorce JAP", "Médiation / conciliation", "Liquidation", "Exécution", "Prise en charge par l'assurance", "Terminé"];
+const ETAPES = ["Consultation", "Convention", "En cours", "Mise en état", "1ère instance", "Jugé en première instance", "Appel", "Attente appel CA", "Divorce", "Médiation / conciliation", "Liquidation", "Exécution", "Prise en charge par l'assurance", "Terminé"];
 function etapeSelect(cur, attrs) {
   const all = ETAPES.concat(D.dossiers.map(x => x.etape).filter(Boolean).filter(x => !ETAPES.includes(x)).sort());
   if (cur && !all.includes(cur)) all.push(cur);

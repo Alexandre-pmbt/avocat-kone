@@ -404,6 +404,21 @@ app.use(express.static(path.join(__dirname, "public"), { index: false, setHeader
   console.log("Facture d'essai CHENU supprimée : " + f.num);
 })();
 
+// ---------------------------------------------------------------- Situation « Divorce JAP » renommée « Divorce » (une seule fois)
+(function situationDivorce() {
+  const lot = "situation-divorce-2026-11-26";
+  if (db.prepare("SELECT 1 FROM journal WHERE action = 'reprise' AND detail = ?").get(lot)) return;
+  let n = 0;
+  db.transaction(() => {
+    db.prepare("SELECT id, data FROM docs WHERE collection = 'dossiers'").all().forEach(r => {
+      const d = JSON.parse(r.data); if (!/^divorce\s+jap$/i.test(String(d.etape || "").trim())) return;
+      d.etape = "Divorce"; db.prepare("UPDATE docs SET data = ? WHERE collection = 'dossiers' AND id = ?").run(JSON.stringify(d), r.id); n++;
+    });
+    db.prepare("INSERT INTO journal VALUES (?,?,?,?)").run(now(), null, "reprise", lot);
+  })();
+  console.log("Situation « Divorce JAP » → « Divorce » : " + n + " dossier(s)");
+})();
+
 // ---------------------------------------------------------------- Renumérotation ponctuelle : dernier devis du client DINET
 (function renumeroterDevisDinet() {
   const lot = "devis-dinet-2026-11-18";
