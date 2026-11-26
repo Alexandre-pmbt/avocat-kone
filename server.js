@@ -128,10 +128,12 @@ app.get("/api/data", auth, (req, res) => res.json(allData()));
 
 // Numéro suivant. Devis / factures : PREFIXE-AAAA-NNN, sans trou. Dossiers : numérotation du cabinet (1, 2, … 49 Bis, …) → plus grand numéro + 1.
 const PREFIX = { devis: "DEV", factures: "FAC" };
-function nextNum(col) {
+// Dossiers : « numéro-année d'ouverture » (78-2026), numéro continu = plus grand numéro existant + 1.
+function nextNum(col, ouverture) {
   if (col === "dossiers") {
     const max = db.prepare("SELECT num FROM docs WHERE collection = 'dossiers'").all().reduce((a, r) => { const n = /^\d+/.test(r.num || "") ? parseInt(r.num, 10) : 0; return Math.max(a, n); }, 0);
-    return String(max + 1);
+    const an = /^\d{4}/.test(String(ouverture || "")) ? String(ouverture).slice(0, 4) : String(new Date(Date.now() + 11 * 3600000).getUTCFullYear());
+    return String(max + 1) + "-" + an;
   }
   const st = db.prepare("SELECT data FROM settings WHERE id = 1").get(), s = st ? JSON.parse(st.data) : {};
   const year = new Date(Date.now() + 11 * 3600000).getUTCFullYear();
@@ -174,7 +176,8 @@ app.put("/api/docs/:col/:id", auth, (req, res) => {
       body.createdBy = req.user.id; body.createdAt = now();
       body.num = null;
       if (col === "devis") body.num = devisNum(body.dossierId, id);
-      else if (col === "dossiers" || (col === "factures" && body.statut === "emise")) body.num = nextNum(col);
+      else if (col === "dossiers") body.num = nextNum(col, body.ouverture);
+      else if (col === "factures" && body.statut === "emise") body.num = nextNum(col);
     }
     if (wanted) body.num = wanted;
     body.updatedAt = now(); body.updatedBy = req.user.id;
@@ -472,6 +475,41 @@ app.use(express.static(path.join(__dirname, "public"), { index: false, setHeader
     db.prepare("INSERT INTO journal VALUES (?,?,?,?)").run(now(), by, "reprise", lot);
   })();
   console.log("Reprise de dossiers : " + n + " dossier(s) ajouté(s)");
+})();
+
+// ---------------------------------------------------------------- Numéros de dossier au format « numéro-année » (une seule fois)
+// Dossiers sans année : « 37 » → « 37-2026 » (année d'ouverture si connue, sinon 2026) ; devis liés renumérotés en conséquence.
+(function numerosAvecAnnee() {
+  const lot = "numeros-annee-2026-11-26";
+  if (db.prepare("SELECT 1 FROM journal WHERE action = 'reprise' AND detail = ?").get(lot)) return;
+  const key = n => String(n || "").toUpperCase().replace(/\s+/g, "");
+  let n = 0;
+  db.transaction(() => {
+    const dossiers = db.prepare("SELECT id, num, data FROM docs WHERE collection = 'dossiers'").all();
+    const pris = new Set(dossiers.map(r => r.num));
+    dossiers.forEach(r => {
+      if (!r.num || /-\d{4}$/.test(r.num)) return;
+      const d = JSON.parse(r.data), an = /^\d{4}/.test(String(d.ouverture || "")) ? String(d.ouverture).slice(0, 4) : "2026";
+      let nouveau = r.num + "-" + an; if (pris.has(nouveau)) return;
+      pris.delete(r.num); pris.add(nouveau);
+      d.num = nouveau;
+      db.prepare("UPDATE docs SET num = ?, data = ? WHERE collection = 'dossiers' AND id = ?").run(nouveau, JSON.stringify(d), r.id);
+      // Devis de ce dossier : DEV-37-01 → DEV-37-2026-01 (et la référence sur les factures qui en sont issues)
+      const ancienPre = "DEV-" + key(r.num) + "-", nouveauPre = "DEV-" + key(nouveau) + "-";
+      db.prepare("SELECT id, num, data FROM docs WHERE collection = 'devis'").all().forEach(v => {
+        if (!v.num || !v.num.startsWith(ancienPre) || !/^\d+$/.test(v.num.slice(ancienPre.length))) return;
+        const nv = nouveauPre + v.num.slice(ancienPre.length), dv = JSON.parse(v.data); dv.num = nv;
+        db.prepare("UPDATE docs SET num = ?, data = ? WHERE collection = 'devis' AND id = ?").run(nv, JSON.stringify(dv), v.id);
+        db.prepare("SELECT id, data FROM docs WHERE collection = 'factures'").all().forEach(f => {
+          const fd = JSON.parse(f.data); if (fd.devisId !== v.id) return;
+          fd.devisNum = nv; db.prepare("UPDATE docs SET data = ? WHERE collection = 'factures' AND id = ?").run(JSON.stringify(fd), f.id);
+        });
+      });
+      n++;
+    });
+    db.prepare("INSERT INTO journal VALUES (?,?,?,?)").run(now(), null, "reprise", lot);
+  })();
+  console.log("Numéros de dossier au format numéro-année : " + n + " dossier(s)");
 })();
 
 // ---------------------------------------------------------------- Sauvegarde quotidienne (30 jours)
