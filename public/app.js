@@ -404,6 +404,13 @@ function vDossier(el, id) {
   el.innerHTML = `
   <div class="head"><div><div class="small muted"><a href="#/dossiers">Dossiers</a> › ${esc(d.num)}</div><h1>${esc(d.intitule)}</h1></div><div class="sp"></div>
     ${tag(ST_DOS, d.statut)}<button class="btn" id="ed">Modifier</button><button class="btn" id="cv">Convention</button><button class="btn" id="nd">+ Devis</button><button class="btn pri" id="nf">+ Facture</button></div>
+  <div class="card" style="margin-bottom:16px">
+    <div class="head" style="margin-bottom:10px"><h2 style="margin:0">Pièces et documents du client</h2><span class="small muted">${docsOf(id).length} document(s)</span><div class="sp"></div>
+      <label class="btn sm pri">+ Ajouter des fichiers<input type="file" id="pjfiles" multiple accept=".pdf,.docx,image/png,image/jpeg,image/webp" hidden></label>
+      <button class="btn sm" id="adddoc">Déposer avec détails (convention signée…)</button></div>
+    <div id="dropzone" style="border:2px dashed var(--line);border-radius:8px;padding:14px;text-align:center;color:var(--mute);margin-bottom:${docsOf(id).length ? "10px" : "0"}">Glissez-déposez ici les pièces du client (PDF, Word, photos – 25 Mo maximum par fichier)</div>
+    ${docsOf(id).length ? `<table>${docsOf(id).map(x => docRow(x)).join("")}</table>` : ""}
+  </div>
   <div class="grid two">
     <div class="card"><h2>Informations</h2><dl class="kv">
       <dt>Client</dt><dd><a href="javascript:editClient('${c ? c.id : ""}')">${esc(clientName(c))}</a>${c ? `<div class="small muted">${esc([c.tel, c.email].filter(Boolean).join(" · "))}</div>` : ""}</dd>
@@ -435,13 +442,28 @@ function vDossier(el, id) {
       ${hNon ? `<button class="btn sm" id="ft">Facturer ${String(hNon).replace(".", ",")} h</button>` : ""}<button class="btn sm" id="at">+ Saisir</button></div>
       ${temps.length ? `<table>${temps.map(t => `<tr><td style="white-space:nowrap">${fdate(t.date)}</td><td>${esc(t.desc)}</td><td class="num">${String(num(t.heures)).replace(".", ",")} h</td><td>${t.factureId ? '<span class="tag ok">Facturé</span>' : `<button class="btn sm ghost" data-deltps="${t.id}">×</button>`}</td></tr>`).join("")}
         <tr><td></td><td class="muted">Total</td><td class="num"><b>${String(hTot).replace(".", ",")} h</b></td><td></td></tr></table>` : `<div class="empty">Aucun temps saisi</div>`}</div>
-    <div class="card"><div class="head" style="margin-bottom:8px"><h2 style="margin:0">Documents du dossier</h2><div class="sp"></div><button class="btn sm" id="adddoc">+ Déposer un document</button></div>
-      ${docsOf(id).length ? `<table>${docsOf(id).map(x => docRow(x)).join("")}</table>` : `<div class="empty">Aucun document – les conventions générées et les factures émises s'y classent automatiquement</div>`}</div>
     <div class="card"><h2>Devis</h2>${devis.length ? `<table>${devis.map(x => `<tr class="click" onclick="go('devis/${x.id}')"><td>${esc(x.num)}</td><td>${fdate(x.date)}</td><td class="num">${money(totals(x).ttc)}</td><td>${tag(ST_DEV, x.statut)}</td><td class="num"><button class="btn sm" onclick="event.stopPropagation();voirDevis('${x.id}')">Voir</button></td></tr>`).join("")}</table>` : `<div class="empty">Aucun devis</div>`}</div>
     <div class="card"><h2>Factures</h2>${facts.length ? `<table>${facts.map(f => { const st = factState(f); return `<tr class="click" onclick="go('facture/${f.id}')"><td>${esc(f.num || "Brouillon")}</td><td>${fdate(f.date)}</td><td class="num">${money(totals(f).ttc)}</td><td><span class="tag ${st[1]}">${st[0]}</span></td><td class="num"><button class="btn sm" onclick="event.stopPropagation();voirFacture('${f.id}')">Voir</button></td></tr>`; }).join("")}</table>` : `<div class="empty">Aucune facture</div>`}</div>
   </div>`;
   bindDocRows(el);
   $("#adddoc").onclick = () => deposerDocument(id);
+  const envoyer = async files => {
+    files = [...files]; if (!files.length) return;
+    const trop = files.filter(f => f.size > 25e6); if (trop.length) return alert("Trop lourd (25 Mo maximum) : " + trop.map(f => f.name).join(", "));
+    const zone = $("#dropzone", el); let n = 0;
+    for (const file of files) {
+      zone.textContent = `Envoi ${++n} / ${files.length} : ${file.name}…`;
+      const mime = file.type || (/\.docx$/i.test(file.name) ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document" : /\.pdf$/i.test(file.name) ? "application/pdf" : "");
+      try { await archiveFile({ blob: file, mime, name: file.name }, { type: "piece", titre: file.name.replace(/\.[^.]+$/, ""), dossierId: id, clientId: d.clientId, date: today() }); }
+      catch (e) { fail(e); break; }
+    }
+    toast(n > 1 ? n + " documents ajoutés" : "Document ajouté"); render();
+  };
+  $("#pjfiles", el).onchange = e => envoyer(e.target.files);
+  const dz = $("#dropzone", el);
+  ["dragenter", "dragover"].forEach(t => dz.addEventListener(t, e => { e.preventDefault(); dz.style.borderColor = "#c9a45c"; dz.style.background = "#fbf6ea"; }));
+  ["dragleave", "drop"].forEach(t => dz.addEventListener(t, e => { e.preventDefault(); dz.style.borderColor = ""; dz.style.background = ""; }));
+  dz.addEventListener("drop", e => envoyer(e.dataTransfer.files));
   const upd = async (fn, msg) => { const o = JSON.parse(JSON.stringify(dossier(id))); fn(o); try { await save("dossiers", o); if (msg) toast(msg); render(); } catch (e) { fail(e); } };
   $("#ed").onclick = () => editDossier(id);
   $("#cv").onclick = () => conventionDialog(id);
