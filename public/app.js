@@ -857,7 +857,7 @@ function pdfDoc(doc, kind) {
   if (tOn) krow("TGC " + String(t.taux).replace(".", ",") + " %", F(t.tgc));
   if (t.deb) krow(tOn ? "Débours (exonérés de TGC)" : "Débours", F(t.deb));
   pdf.setFillColor(...SOFT); pdf.rect(kx - 3, ky - 4.2, R - kx + 3, 7.2, "F"); krow((doc.avoir ? "TOTAL AVOIR" : "TOTAL") + (tOn ? " TTC" : ""), F(t.ttc), true);
-  if (isFact && !doc.avoir) { font("bolditalic", 9, LOGO_RED); txt("À votre aimable règlement", R - 2, ky - 0.5, { align: "right" }); ky += 5; }
+  if (isFact && !doc.avoir) { font("bolditalic", 9, LOGO_RED); txt("En votre aimable règlement", R - 2, ky - 0.5, { align: "right" }); ky += 5; }
   if (!tOn) { font("italic", 7.5, GREY); txt("TGC non applicable – cabinet non assujetti", R - 2, ky - 1.5, { align: "right" }); ky += 3.5; }
   if (verse) {
     krow("Moins acomptes versés", "- " + F(verse));
