@@ -354,7 +354,10 @@ function etapeAutre(sel, prev) {
   if (!v) { sel.value = prev || ""; return prev || ""; }
   const o = document.createElement("option"); o.textContent = v; sel.insertBefore(o, sel.lastElementChild); sel.value = v; return v;
 }
-const HON = { forfait: "Forfait", horaire: "Au temps passé", resultat: "Forfait + honoraire de résultat", aj: "Aide juridictionnelle", assurance: "Protection juridique (assurance)" };
+const HON = { forfait: "Au forfait", horaire: "Au taux horaire" };
+const HON_LBL = Object.assign({ resultat: "Forfait + honoraire de résultat", aj: "Aide juridictionnelle", assurance: "Protection juridique (assurance)" }, HON);
+// Plafond annuel (taux horaire, institutions) : facturé sur l'année civile en cours pour le dossier.
+const factureAnnee = d => D.factures.filter(f => f.dossierId === d.id && f.statut === "emise").reduce((a, f) => a + (String(f.date || "").startsWith(today().slice(0, 4)) ? totals(f).ttc : 0), 0);
 // Honoraires d'un dossier : convention, règlements reçus (acomptes hors facture + règlements de ses factures), solde.
 const dosRegle = d => (d.reglements || []).reduce((a, r) => a + num(r.montant), 0) + D.factures.filter(f => f.dossierId === d.id && !f.avoir).reduce((a, f) => a + paid(f), 0);
 const paysOf = d => (d.reglements || []).map(r => ({ date: r.date, montant: num(r.montant) }))
@@ -385,20 +388,24 @@ function editDossier(id, clientId) {
       <div class="f"><label>Date de premier contact</label><input name="premierContact" type="date" value="${esc(d.premierContact)}"></div>
       <div class="f"><label>Ouvert le</label><input name="ouverture" type="date" value="${esc(d.ouverture)}"></div>
       <div class="sec">Honoraires</div>
-      <div class="f"><label>Mode</label><select name="honoraires">${opts(HON, d.honoraires)}</select></div>
-      <div class="f"><label>Montant de la convention (F)</label><input name="conventionMontant" inputmode="numeric" value="${esc(d.conventionMontant)}"></div>
+      <div class="f"><label>Facturation</label><select name="honoraires">${opts(HON, d.honoraires === "horaire" ? "horaire" : "forfait")}</select></div>
+      <div class="f hf"><label>Montant du forfait (F)</label><input name="conventionMontant" inputmode="numeric" value="${esc(d.conventionMontant)}"></div>
+      <div class="f hh"><label>Taux horaire${HTL()} (F)</label><input name="taux" inputmode="numeric" value="${esc(d.taux || s.tauxHoraire || "")}"></div>
+      <div class="f hh"><label>Montant maximum annuel (F) – institutions</label><input name="plafondAnnuel" inputmode="numeric" value="${esc(d.plafondAnnuel)}" placeholder="Facultatif"></div>
       <div class="f"><label>Convention signée le</label><input name="conventionDate" type="date" value="${esc(d.conventionDate)}"></div>
       <div class="f"><label>Aide juridictionnelle</label><select name="aj">${listOpts(["", "AJ", "AJMP", "AJP"], d.aj)}</select></div>
-      <div class="f"><label>Taux horaire${HTL()} (F)</label><input name="taux" inputmode="numeric" value="${esc(d.taux || s.tauxHoraire || "")}"></div>
       <div class="f s6"><label>Résumé de l'affaire</label><textarea name="resume">${esc(d.resume)}</textarea></div>
     </div>
     <div class="actions">${id ? `<button class="btn danger" id="del">Supprimer</button>` : ""}<div class="sp"></div><button class="btn ghost" id="cancel">Annuler</button><button class="btn pri" id="ok">Enregistrer</button></div>`, (m, close) => {
     $("#cancel", m).onclick = close;
     $("#nc", m).onclick = () => editClient(null, c => { $("[name=clientId]", m).innerHTML = clientOpts(c.id); });
     let etPrev = d.etape || ""; $("[name=etape]", m).onchange = e => { etPrev = etapeAutre(e.target, etPrev); };
+    const syncHon = () => { const h = $("[name=honoraires]", m).value === "horaire"; $$(".hf", m).forEach(x => x.style.display = h ? "none" : ""); $$(".hh", m).forEach(x => x.style.display = h ? "" : "none"); };
+    $("[name=honoraires]", m).onchange = syncHon; syncHon();
     $("#ok", m).onclick = async () => {
       const f = readForm(m); if (!f.intitule || !f.clientId) return alert("L'intitulé et le client sont obligatoires.");
       f.conventionMontant = f.conventionMontant ? num(f.conventionMontant) : "";
+      f.plafondAnnuel = f.plafondAnnuel ? num(f.plafondAnnuel) : "";
       try { const s = await save("dossiers", Object.assign(d, f)); close(); toast(id ? "Dossier enregistré" : "Dossier " + s.num + " ouvert"); id ? render() : go("dossier/" + s.id); } catch (e) { fail(e); }
     };
     if ($("#del", m)) $("#del", m).onclick = async () => {
@@ -439,8 +446,9 @@ function vDossier(el, id) {
     </dl>${d.resume ? `<p style="white-space:pre-wrap;margin:14px 0 0">${esc(d.resume)}</p>` : ""}</div>
     <div class="card"><div class="head" style="margin-bottom:8px"><h2 style="margin:0">Honoraires et règlements</h2><div class="sp"></div><button class="btn sm pri" id="ar">+ Règlement reçu</button></div>
       <dl class="kv">
-        <dt>Mode</dt><dd>${esc(HON[d.honoraires] || "—")}${d.aj ? ` – ${esc(d.aj)}` : ""}${d.taux && d.honoraires === "horaire" ? ` – ${money(num(d.taux))}${HTL()} / h` : ""}</dd>
-        <dt>Convention</dt><dd>${num(d.conventionMontant) ? money(num(d.conventionMontant)) : "—"}${d.conventionDate ? ` <span class="small muted">signée le ${fdate(d.conventionDate)}</span>` : d.conventionNote ? ` <span class="small muted">${esc(d.conventionNote)}</span>` : ""}</dd>
+        <dt>Mode</dt><dd>${esc(HON_LBL[d.honoraires] || "—")}${d.aj ? ` – ${esc(d.aj)}` : ""}${d.taux && d.honoraires === "horaire" ? ` – ${money(num(d.taux))}${HTL()} / h` : ""}</dd>
+        ${d.honoraires === "horaire" && num(d.plafondAnnuel) ? `<dt>Plafond annuel</dt><dd>${money(num(d.plafondAnnuel))} <span class="small ${factureAnnee(d) >= num(d.plafondAnnuel) ? "late" : "muted"}">– facturé en ${today().slice(0, 4)} : ${money(factureAnnee(d))}${factureAnnee(d) >= num(d.plafondAnnuel) ? " (plafond atteint)" : `, reste ${money(num(d.plafondAnnuel) - factureAnnee(d))}`}</span></dd>` : ""}
+        ${d.honoraires !== "horaire" || d.conventionDate ? `<dt>Convention</dt><dd>${num(d.conventionMontant) ? money(num(d.conventionMontant)) : "—"}${d.conventionDate ? ` <span class="small muted">signée le ${fdate(d.conventionDate)}</span>` : d.conventionNote ? ` <span class="small muted">${esc(d.conventionNote)}</span>` : ""}</dd>` : ""}
         <dt>Payé à ce jour</dt><dd><b>${money(dosRegle(d))}</b></dd>
         ${num(d.conventionMontant) ? `<dt>Solde dû</dt><dd class="${dosSolde(d) ? "late" : ""}"><b>${money(dosSolde(d))}</b>${dosSolde(d) ? "" : ' <span class="tag ok">Soldé</span>'}</dd>` : ""}
       </dl>
@@ -572,6 +580,13 @@ function linesEditor(doc, locked) {
   </table>${locked ? "" : `<button class="btn sm" id="addl" style="margin-top:6px">+ Ligne</button> <button class="btn sm" id="addd" style="margin-top:6px">+ Débours</button>`}
   <div class="totals" id="tot"></div>`;
 }
+function plafondHint(doc, t) {
+  const d = doc.paiements && !doc.avoir ? dossier(doc.dossierId) : null;
+  if (!d || d.honoraires !== "horaire" || !num(d.plafondAnnuel)) return "";
+  const cetteAnnee = String(doc.date || today()).startsWith(today().slice(0, 4));
+  const deja = factureAnnee(d) - (doc.statut === "emise" && cetteAnnee ? t.ttc : 0), apres = deja + (cetteAnnee ? t.ttc : 0), max = num(d.plafondAnnuel);
+  return `<div class="small ${apres > max ? "late" : "muted"}" style="display:block;text-align:right;margin-top:6px">Plafond annuel ${money(max)} : déjà facturé ${money(deja)}, avec cette facture ${money(apres)}${apres > max ? ` – dépassement de ${money(apres - max)}` : ""}</div>`;
+}
 function totalsHtml(doc) {
   const t = totals(doc), p = doc.paiements ? paid(doc) : 0, imp = num(doc.impute);
   const on = t.taux > 0;
@@ -580,7 +595,8 @@ function totalsHtml(doc) {
     ${on ? "" : `<div class="small muted" style="justify-content:flex-end">TGC non applicable – cabinet non assujetti</div>`}
     ${doc.paiements && !doc.avoir && imp ? `<div><span>Moins acomptes versés</span><span>- ${money(imp)}</span></div>` : ""}
     ${doc.paiements && doc.statut === "emise" && !doc.avoir && p ? `<div><span>Règlements reçus</span><span>- ${money(p)}</span></div>` : ""}
-    ${doc.paiements && !doc.avoir && (imp || (doc.statut === "emise" && p)) ? `<div class="big"><span>Solde net à payer</span><span>${money(Math.max(0, t.ttc - imp - (doc.statut === "emise" ? p : 0)))}</span></div>` : ""}`;
+    ${doc.paiements && !doc.avoir && (imp || (doc.statut === "emise" && p)) ? `<div class="big"><span>Solde net à payer</span><span>${money(Math.max(0, t.ttc - imp - (doc.statut === "emise" ? p : 0)))}</span></div>` : ""}
+    ${plafondHint(doc, t)}`;
 }
 function bindLines(root, doc, locked, rerender) {
   const refresh = () => { $("#tot", root).innerHTML = totalsHtml(doc); (doc.lignes || []).forEach((l, i) => { const c = $(`[data-m="${i}"]`, root); if (c) c.textContent = money(num(l.qte) * num(l.pu)); }); };
@@ -796,7 +812,7 @@ function pdfDoc(doc, kind) {
   const b1 = block(M, kind === "devis" ? "DOSSIER & MODE D'HONORAIRES" : "DOSSIER & MODE DE FACTURATION", [
     ["Objet / Affaire", objet + (dos && dos.adverse ? " c/ " + dos.adverse : "")],
     ["Juridiction / Domaine", dos ? [dos.juridiction, dos.rg ? "RG " + dos.rg : "", dos.domaine].filter(Boolean).join(" – ") || "Conseil" : "—"],
-    ["Facturation", dos ? (HON[dos.honoraires] || "Forfait") + (dos.honoraires === "horaire" && num(dos.taux) ? " (" + grp(num(dos.taux)) + " XPF" + HTL(t.taux > 0) + "/h)" : "") + (dos.aj ? " – " + dos.aj : "") : "Forfait"]]);
+    ["Facturation", dos ? (HON_LBL[dos.honoraires] || "Au forfait") + (dos.honoraires === "horaire" && num(dos.taux) ? " (" + grp(num(dos.taux)) + " XPF" + HTL(t.taux > 0) + "/h)" : "") + (dos.honoraires === "horaire" && num(dos.plafondAnnuel) ? " – plafond annuel " + grp(num(dos.plafondAnnuel)) + " XPF" : "") + (dos.aj ? " – " + dos.aj : "") : "Forfait"]]);
   const b2 = block(bx2, isFact ? "FACTURÉ À (CLIENT)" : "DESTINATAIRE (CLIENT)", [
     ["Nom / Raison sociale", clientName(c) + (c.type === "societe" && c.nom ? "\nReprésentée par " + [c.civilite, c.prenom, c.nom].filter(Boolean).join(" ") : "")],
     c.ridet ? ["N° RIDET", c.ridet] : null, ["Adresse", c.adresse], ["Téléphone", c.tel], ["Email", c.email]].filter(Boolean));
@@ -911,11 +927,11 @@ function conventionDialog(dosId) {
       <div class="sec">Article 1 – Objet de la mission (une ligne par point)</div>
       <div class="f s6"><textarea name="mission" style="min-height:100px">${esc(missionDefaut)}</textarea></div>
       <div class="sec">Article 3 – Honoraires</div>
-      <div class="f"><label>Mode</label><select name="mode">${opts(HON, d.honoraires || "forfait")}</select></div>
+      <div class="f"><label>Mode</label><select name="mode">${opts(HON, d.honoraires === "horaire" ? "horaire" : "forfait")}</select></div>
       <div class="f"><label>Montant du forfait (F)</label><input name="montant" inputmode="numeric" value="${esc(d.conventionMontant)}"></div>
       ${TGC_ON() ? `<div class="f"><label>Montant exprimé</label><select name="base"><option value="HT">HT – TGC en sus</option><option value="TTC">TTC – taxes comprises</option></select></div>` : `<input type="hidden" name="base" value="NET">`}
       <div class="f"><label>Taux horaire${HTL()} (F)</label><input name="taux" inputmode="numeric" value="${esc(d.taux || s.tauxHoraire || 25000)}"></div>
-      <div class="f"><label>Plafond des honoraires (F, facultatif)</label><input name="plafond" inputmode="numeric"></div>
+      <div class="f"><label>Montant maximum annuel (F) – institutions</label><input name="plafond" inputmode="numeric" value="${esc(d.plafondAnnuel)}" placeholder="Facultatif"></div>
       <div class="f"><label>Honoraire de résultat (%)</label><input name="resultat" inputmode="decimal"></div>
       <div class="f"><label>Provision à la signature (F)</label><input name="provision" inputmode="numeric"></div>
       <div class="f s4"><label>Échéancier (facultatif)</label><input name="echeancier" placeholder="Ex. : le solde en 3 mensualités de 50 000 F à compter de janvier 2027"></div>
@@ -940,13 +956,14 @@ function conventionDialog(dosId) {
     $("#o", m).onclick = async () => {
       const f = readForm(m);
       let file, saved;
-      try { file = await conventionDocx(d, c, f); saved = await archiveFile(file, { type: "convention", titre: f.titre + (f.mode ? " – " + (HON[f.mode] || f.mode) : ""), dossierId: d.id, clientId: d.clientId, date: today() }); }
+      try { file = await conventionDocx(d, c, f); saved = await archiveFile(file, { type: "convention", titre: f.titre + (f.mode ? " – " + (HON_LBL[f.mode] || f.mode) : ""), dossierId: d.id, clientId: d.clientId, date: today() }); }
       catch (e) { console.error(e); return alert("Impossible de générer la convention : " + e.message); }
       if (f.maj) {
         const o = JSON.parse(JSON.stringify(d)); o.honoraires = f.mode;
         if (["forfait", "resultat"].includes(f.mode) && num(f.montant)) o.conventionMontant = num(f.montant);
         if (f.mode === "horaire" && num(f.taux)) o.taux = num(f.taux);
-        const note = "Convention d'honoraires générée (" + (HON[f.mode] || f.mode) + (num(f.montant) && f.mode !== "horaire" ? ", " + money(num(f.montant)) + (f.base === "NET" ? "" : " " + f.base) : "") + ").";
+        if (f.mode === "horaire") o.plafondAnnuel = num(f.plafond) || "";
+        const note = "Convention d'honoraires générée (" + (HON_LBL[f.mode] || f.mode) + (num(f.montant) && f.mode !== "horaire" ? ", " + money(num(f.montant)) + (f.base === "NET" ? "" : " " + f.base) : "") + ").";
         o.journal = o.journal || [];
         if (!o.journal.some(j => j.date === today() && j.texte === note)) o.journal.push({ id: uid(), date: today(), texte: note, by: ME.id });
         try { await save("dossiers", o); } catch (e) { fail(e); }
@@ -1023,7 +1040,7 @@ async function conventionDocx(d, c, f) {
   const ht = on ? " hors taxes" : "", taxes = on ? `, augmenté des taxes en vigueur (TGC ${tgc} %)` : "";
   if (f.mode === "horaire") {
     children.push(just(`Les prestations sont facturées sur la base d'un taux horaire de ${fmtF(f.taux)}${ht}${taxes}.`));
-    if (num(f.plafond)) children.push(bullet(`Le montant total des honoraires ne pourra excéder ${fmtF(f.plafond)}${ht}.`));
+    if (num(f.plafond)) children.push(bullet(`Le montant total des honoraires facturés ne pourra excéder ${fmtF(f.plafond)}${ht} par année civile.`));
   } else if (f.mode === "aj") {
     children.push(just(`La mission est réalisée au titre de l'aide juridictionnelle${d.aj ? " (" + d.aj + ")" : ""}. Si celle-ci n'est que partielle ou venait à être retirée, les honoraires restant à la charge du Client seront fixés d'un commun accord par avenant à la présente convention.`));
   } else if (f.mode === "assurance") {
