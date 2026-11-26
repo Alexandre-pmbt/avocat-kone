@@ -535,7 +535,7 @@ function vDossier(el, id) {
     const taux = num(d.taux || S().tauxHoraire);
     if (!taux) return alert("Renseignez d'abord le taux horaire du dossier (bouton « Modifier »).");
     const f = { id: uid(), statut: "brouillon", date: today(), echeance: addDays(today(), +S().delai || 30), clientId: d.clientId, dossierId: id, objet: d.intitule, tgc: S().tgc,
-      lignes: nonFact.slice().sort((a, b) => a.date.localeCompare(b.date)).map(t => ({ type: "hon", desc: fdate(t.date) + " – " + t.desc, qte: num(t.heures), pu: taux })), paiements: [], tempsIds: nonFact.map(t => t.id) };
+      lignes: nonFact.slice().sort((a, b) => a.date.localeCompare(b.date)).map(t => ({ type: "hon", date: t.date, desc: t.desc, qte: num(t.heures), pu: taux })), paiements: [], tempsIds: nonFact.map(t => t.id) };
     try {
       const s = await save("factures", f);
       const o = JSON.parse(JSON.stringify(dossier(id))); o.temps.forEach(t => { if (f.tempsIds.includes(t.id)) t.factureId = s.id; }); await save("dossiers", o);
@@ -569,9 +569,10 @@ function vFactures(el) {
 
 // ============================================================ Éditeur commun devis / facture
 function linesEditor(doc, locked) {
-  return `<table class="lines"><tr><th class="ty">Nature</th><th>Désignation</th><th class="q num">Qté / h</th><th class="pu num">P.U.${HTL(totals(doc).taux > 0)} (F)</th><th class="num">Montant${HTL(totals(doc).taux > 0)}</th><th></th></tr>
+  return `<table class="lines"><tr><th class="ty">Nature</th><th style="width:140px">Date</th><th>Désignation</th><th class="q num">Qté / h</th><th class="pu num">P.U.${HTL(totals(doc).taux > 0)} (F)</th><th class="num">Montant${HTL(totals(doc).taux > 0)}</th><th></th></tr>
   ${(doc.lignes || []).map((l, i) => `<tr>
     <td><select data-l="${i}" data-k="type" ${locked ? "disabled" : ""}><option value="hon" ${l.type !== "deb" ? "selected" : ""}>Honoraires</option><option value="deb" ${l.type === "deb" ? "selected" : ""}>Débours / frais</option></select></td>
+    <td><input type="date" data-l="${i}" data-k="date" value="${esc(l.date)}" ${locked ? "disabled" : ""}></td>
     <td><input data-l="${i}" data-k="desc" value="${esc(l.desc)}" ${locked ? "disabled" : ""}></td>
     <td><input data-l="${i}" data-k="qte" value="${esc(l.qte)}" style="text-align:right" ${locked ? "disabled" : ""}></td>
     <td><input data-l="${i}" data-k="pu" value="${esc(l.pu)}" style="text-align:right" ${locked ? "disabled" : ""}></td>
@@ -820,19 +821,22 @@ function pdfDoc(doc, kind) {
 
   // ---- Prestations
   font("bold", 9.5, INK); txt("DÉSIGNATION DES PRESTATIONS" + (t.deb ? " ET DÉBOURS" : ""), M, y); y += 2.5;
-  const cols = { d: M + 2, q: 128, pu: 155, m: R - 2 };
+  const avecDates = (doc.lignes || []).some(l => l.date);
+  const cols = { dt: M + 2, d: avecDates ? M + 23 : M + 2, q: 128, pu: 155, m: R - 2 };
   const thead = () => { pdf.setFillColor(...INK); pdf.rect(M, y, R - M, 7.5, "F"); font("bold", 8.3, [255, 255, 255]);
+    if (avecDates) txt("Date", cols.dt, y + 5);
     txt("Description des diligences et frais", cols.d, y + 5); txt("Qté / h", cols.q, y + 5, { align: "right" }); txt("P.U." + HTL(t.taux > 0), cols.pu, y + 5, { align: "right" }); txt("Montant" + HTL(t.taux > 0), cols.m, y + 5, { align: "right" }); y += 7.5; };
   thead();
   const rows = (doc.lignes || []).filter(l => l.desc || num(l.pu));
   const section = (label, list) => {
     if (!list.length) return;
     if (ensure(14)) thead();
-    font("bold", 7.8, LOGO_RED); txt(label.toUpperCase(), cols.d, y + 4.6); y += 6.5;
+    font("bold", 7.8, LOGO_RED); txt(label.toUpperCase(), cols.dt, y + 4.6); y += 6.5;
     list.forEach(l => {
       font("normal", 9, INK);
       const lines = pdf.splitTextToSize(l.desc || "", cols.q - cols.d - 16), h = Math.max(1, lines.length) * 4.2 + 2.8;
       if (ensure(h)) { thead(); font("normal", 9, INK); }
+      if (avecDates && l.date) txt(fdate(l.date), cols.dt, y + 4.2);
       txt(lines, cols.d, y + 4.2);
       txt(String(num(l.qte)).replace(".", ","), cols.q, y + 4.2, { align: "right" });
       txt((num(l.pu) < 0 ? "-" : "") + grp(num(l.pu)), cols.pu, y + 4.2, { align: "right" });
@@ -853,6 +857,7 @@ function pdfDoc(doc, kind) {
   if (tOn) krow("TGC " + String(t.taux).replace(".", ",") + " %", F(t.tgc));
   if (t.deb) krow(tOn ? "Débours (exonérés de TGC)" : "Débours", F(t.deb));
   pdf.setFillColor(...SOFT); pdf.rect(kx - 3, ky - 4.2, R - kx + 3, 7.2, "F"); krow((doc.avoir ? "TOTAL AVOIR" : "TOTAL") + (tOn ? " TTC" : ""), F(t.ttc), true);
+  if (isFact && !doc.avoir) { font("bolditalic", 9, LOGO_RED); txt("À votre aimable règlement", R - 2, ky - 0.5, { align: "right" }); ky += 5; }
   if (!tOn) { font("italic", 7.5, GREY); txt("TGC non applicable – cabinet non assujetti", R - 2, ky - 1.5, { align: "right" }); ky += 3.5; }
   if (verse) {
     krow("Moins acomptes versés", "- " + F(verse));
